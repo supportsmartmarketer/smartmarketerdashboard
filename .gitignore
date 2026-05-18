@@ -39,6 +39,7 @@ env.sh
 
 # local pixel export dumps (often large / sensitive)
 pixel_export_*.csv
+Freedom Heavy Haul V4.csv
 
 # vercel
 .vercel
