@@ -12,6 +12,7 @@
     "db:studio": "prisma studio",
     "db:push": "prisma db push",
     "verify:v3": "npx tsx scripts/verify-v3-pixel-path.ts",
+    "verify:v4": "npx tsx scripts/verify-v3-pixel-path.ts \"Freedom Heavy Haul V4.csv\"",
     "dry-run:csv": "node scripts/dry-run-pixel-csv.mjs"
   },
   "dependencies": {

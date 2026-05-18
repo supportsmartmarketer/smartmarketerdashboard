@@ -17,6 +17,7 @@ const uploadSelectFull = {
   highIntentCount: true,
   visitorProfileTotal: true,
   visitorProfileProcessed: true,
+  pixelFormat: true,
 } as const
 
 const uploadSelectLegacy = {
@@ -72,6 +73,7 @@ export async function GET(
           highIntentCount: null,
           visitorProfileTotal: null,
           visitorProfileProcessed: null,
+          pixelFormat: null,
         }
       }
     }

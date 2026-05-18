@@ -405,9 +405,15 @@ export default function UploadPage() {
         <div className="rounded-lg border bg-gray-50 p-4">
           <ul className="list-disc space-y-2 pl-5 text-sm text-gray-700">
             <li>
-              <strong>Smart Pixel</strong> CSV exports: <code className="text-xs">EVENT_TIMESTAMP</code>,{' '}
-              <code className="text-xs">EVENT_TYPE</code>, <code className="text-xs">EVENT_DATA</code>,{' '}
-              <code className="text-xs">IP_ADDRESS</code>, <code className="text-xs">HEM_SHA256</code>, etc.
+              <strong>Smart Pixel V3</strong> exports include <code className="text-xs">EVENT_DATA</code>,{' '}
+              <code className="text-xs">EVENT_TYPE</code>, <code className="text-xs">IP_ADDRESS</code>, and
+              behavioral timestamps. <strong>V4</strong> exports use <code className="text-xs">FULL_URL</code>,{' '}
+              <code className="text-xs">REFERRER_URL</code>, and <code className="text-xs">EVENT_TIMESTAMP</code>{' '}
+              (no <code className="text-xs">EVENT_DATA</code> column). The uploader detects V3 vs V4 automatically.
+            </li>
+            <li>
+              Revenue estimates use <strong>all completed uploads</strong> for the selected client (V3 and V4
+              together), with visitors deduplicated by pixel id hash / keys.
             </li>
             <li>
               Row upload runs first; when visitor-profile building begins you may choose to watch progress

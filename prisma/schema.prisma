@@ -42,6 +42,10 @@ model Upload {
   /** Visitor profile build phase: progress for polling (distinct non-unknown visitors) */
   visitorProfileTotal     Int? @map("visitor_profile_total")
   visitorProfileProcessed   Int? @map("visitor_profile_processed")
+  /** smart_pixel_v3 | smart_pixel_v4 | unknown (detected from CSV headers) */
+  pixelFormat       String?   @map("pixel_format")
+  /** Legacy/experimental column on some databases; kept so `db push` does not drop data */
+  ingestAux         String?   @map("ingest_aux") @db.Text
 
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rawEvents RawEvent[]

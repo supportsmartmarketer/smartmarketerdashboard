@@ -1,18 +1,13 @@
 /**
  * Verifies Smart Pixel CSV rows parse with parseRow (no DB).
+ * Pass a file path or rely on default V3 sample.
  * Run: npm run verify:v3
  */
 import fs from 'fs'
 import path from 'path'
 import Papa from 'papaparse'
 import { parseRow, type CSVRow } from '../lib/csv-processor'
-
-function parseHeaderLine(firstLine: string): string[] {
-  const parsed = Papa.parse<string[]>(firstLine, { header: false })
-  const row = parsed.data[0]
-  if (!row) return []
-  return row.map((h) => String(h).trim())
-}
+import { detectPixelFormatFromCsvRow } from '../lib/pixel-format'
 
 const root = path.join(__dirname, '..')
 const defaultCsv = path.join(root, 'small pixel file.csv')
@@ -24,12 +19,6 @@ if (!fs.existsSync(csvPath)) {
 }
 
 const text = fs.readFileSync(csvPath, 'utf8')
-const firstLine = text.split(/\r?\n/).find((l) => l.length > 0) ?? ''
-const headers = parseHeaderLine(firstLine)
-const hasEventData = headers.map((h) => h.trim().toLowerCase()).includes('event_data')
-
-console.log('File:', csvPath)
-console.log('Header has EVENT_DATA:', hasEventData)
 
 const parsed = Papa.parse<CSVRow>(text, {
   header: true,
@@ -37,25 +26,31 @@ const parsed = Papa.parse<CSVRow>(text, {
   transformHeader: (h) => h.trim(),
 })
 
+const sampleRow = parsed.data.find((r) => Object.keys(r).length > 0)
+const format = sampleRow ? detectPixelFormatFromCsvRow(sampleRow) : 'unknown'
+
+console.log('File:', csvPath)
+console.log('Detected pixel format:', format)
+
 let parsedOk = 0
-let parsedFail = 0
+let missingUrl = 0
 
 for (const row of parsed.data) {
   const ev = parseRow(row)
   if (!ev) continue
   parsedOk++
-  if (!ev.url || !ev.eventType) parsedFail++
+  if (!ev.url) missingUrl++
 }
 
-const sample = parsed.data.find((r) => r.EVENT_DATA && r.EVENT_TYPE)
-if (sample) {
-  const ev = parseRow(sample)
-  console.log('Sample EVENT_TYPE:', sample.EVENT_TYPE)
+const v3Sample = parsed.data.find((r) => r.EVENT_DATA && r.EVENT_TYPE)
+if (v3Sample) {
+  const ev = parseRow(v3Sample)
+  console.log('Sample EVENT_TYPE:', v3Sample.EVENT_TYPE)
   console.log('parseRow url:', ev?.url?.slice(0, 72))
 }
 
 console.log('Rows successfully parsed:', parsedOk)
-console.log('Rows missing url or eventType after parse:', parsedFail)
+console.log('Rows missing URL after parse:', missingUrl)
 
 if (parsedOk === 0) {
   console.error('FAIL: no parsable rows')

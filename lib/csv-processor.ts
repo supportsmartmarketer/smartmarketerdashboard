@@ -2,7 +2,18 @@ import { Readable } from 'stream'
 import Papa from 'papaparse'
 import { prisma } from './prisma'
 import { parseCoordinates, getGeoLocation } from './geo'
-import { calculateEngagementScore, getEngagementSegment, isKeyPage, isCTAClick, isExitIntent, isVideoEngaged, VisitorFlags } from './scoring'
+import {
+  calculateEngagementScore,
+  calculateEngagementScoreSparseBehavior,
+  eventsHaveSparseBehavioralSignals,
+  getEngagementSegment,
+  isKeyPage,
+  isCTAClick,
+  isExitIntent,
+  isVideoEngaged,
+  VisitorFlags,
+} from './scoring'
+import { detectPixelFormatFromCsvRow, type PixelFormat } from './pixel-format'
 
 /** Progress polling; ignore if `processed_rows` column is missing on old DBs. */
 async function safeUploadSetProcessedRows(uploadId: string, processedRows: number) {
@@ -18,6 +29,18 @@ async function safeUploadSetProcessedRows(uploadId: string, processedRows: numbe
 }
 
 /** Live visitor-profile build progress; ignore if DB columns are missing. */
+async function safeUploadSetPixelFormat(uploadId: string, pixelFormat: PixelFormat) {
+  try {
+    await prisma.upload.update({
+      where: { id: uploadId },
+      data: { pixelFormat },
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (!msg.includes('pixel_format')) throw e
+  }
+}
+
 async function safeUploadSetVisitorProfileProgress(
   uploadId: string,
   processed: number,
@@ -94,13 +117,8 @@ function getTimestampFromRow(row: CSVRow): Date | null {
       if (d) return d
     }
   }
-  // Fallback: try any column value that looks like a date (ISO or common formats)
-  for (const [, value] of Object.entries(row)) {
-    if (value === undefined || value === '') continue
-    if (typeof value !== 'string') continue
-    const d = normalizeTimestamp(value)
-    if (d) return d
-  }
+  // Do not scan arbitrary columns: V3/V4 enrichment fields often contain ISO-like dates
+  // (e.g. LinkedIn extraction_date) that are not the pixel hit time and would skew ranges.
   return null
 }
 
@@ -191,9 +209,9 @@ export function parseRow(row: CSVRow): ProcessedEvent | null {
 
   let timeOnPageMs = ed.timeOnPageMs
   let idleTimeMs = ed.idleTimeMs
-  let title = ed.title
-  let scrollPctFromEvent = ed.scrollPctFromEvent
-  let thresholdFromEvent = ed.thresholdFromEvent
+  const title = ed.title
+  const scrollPctFromEvent = ed.scrollPctFromEvent
+  const thresholdFromEvent = ed.thresholdFromEvent
   if (!timeOnPageMs) {
     const timeOnPage = row['Timeonpage'] || row['time_on_page'] || row['timeonpage'] || row['TIME_ON_PAGE']
     timeOnPageMs = timeOnPage ? Math.max(0, Math.min(600000, parseInt(timeOnPage) * 1000)) : undefined
@@ -287,8 +305,22 @@ function extractIdentityFromRow(row: CSVRow): IdentityData {
     jobTitle:       pick('JOB_TITLE', 'Job Title', 'job_title'),
     seniorityLevel: pick('SENIORITY_LEVEL', 'Seniority Level', 'seniority_level'),
     businessEmail:  pick('BUSINESS_EMAIL', 'Business Email', 'business_email'),
-    phone:          pick('DIRECT_NUMBER', 'Direct Number', 'direct_number'),
-    mobilePhone:    pick('MOBILE_PHONE', 'Mobile Phone', 'mobile_phone'),
+    phone: pick(
+      'DIRECT_NUMBER',
+      'Direct Number',
+      'direct_number',
+      'ALL_LANDLINES',
+      'All Landlines',
+      'all_landlines'
+    ),
+    mobilePhone: pick(
+      'MOBILE_PHONE',
+      'Mobile Phone',
+      'mobile_phone',
+      'ALL_MOBILES',
+      'All Mobiles',
+      'all_mobiles'
+    ),
     address:        pick('PERSONAL_ADDRESS', 'Personal Address', 'personal_address'),
     companyAddress: pick('COMPANY_ADDRESS', 'Company Address', 'company_address'),
     city:           pick('PERSONAL_CITY', 'Personal City', 'personal_city', 'COMPANY_CITY', 'Company City', 'company_city'),
@@ -460,6 +492,14 @@ export async function processCSVUploadFromStream(
       await safeUploadSetProcessedRows(uploadId, totalProcessed)
     }
 
+    let pixelFormatSaved = false
+    const savePixelFormatOnce = (row: CSVRow) => {
+      if (pixelFormatSaved) return
+      const fmt = detectPixelFormatFromCsvRow(row)
+      pixelFormatSaved = true
+      void safeUploadSetPixelFormat(uploadId, fmt)
+    }
+
     Papa.parse(nodeStream, {
       header: true,
       skipEmptyLines: true,
@@ -467,6 +507,7 @@ export async function processCSVUploadFromStream(
       step(results: { data: CSVRow | CSVRow[] }, parser: { pause: () => void; resume: () => void }) {
         const rows = Array.isArray(results.data) ? results.data : [results.data].filter(Boolean) as CSVRow[]
         for (const row of rows) {
+          savePixelFormatOnce(row)
           const event = parseRow(row)
           if (event) {
             // Strip rawJson from the event to save memory - identity captured separately
@@ -611,10 +652,16 @@ export async function processCSVUpload(
     const insertBatchSize = 200
 
     // Process and insert in chunks - never hold full processedEvents in memory
+    let pixelFormatSaved = false
     for (let i = 0; i < rows.length; i += insertBatchSize) {
       const chunk = rows.slice(i, i + insertBatchSize)
       const batch: ProcessedEvent[] = []
       for (const row of chunk) {
+        if (!pixelFormatSaved && row && Object.keys(row).length > 0) {
+          const fmt = detectPixelFormatFromCsvRow(row)
+          pixelFormatSaved = true
+          await safeUploadSetPixelFormat(uploadId, fmt)
+        }
         const event = parseRow(row)
         if (event) {
           event.rawJson = undefined // don't store full row in DB
@@ -761,9 +808,13 @@ async function processVisitorProfile(
   const exitIntentTriggered = events.some((e) => isExitIntent(e.eventType))
   const videoEngaged = events.some((e) => isVideoEngaged(e.eventType))
 
+  const sparseBehavior = eventsHaveSparseBehavioralSignals(events)
+
   const flags: VisitorFlags = {
     is_repeat_visitor: sessions.length >= 2,
-    high_attention: totalTimeOnPageMs >= 60000,
+    high_attention: sparseBehavior
+      ? uniquePages >= 3 || sessions.length >= 2
+      : totalTimeOnPageMs >= 60000,
     visited_key_page: visitedKeyPage,
     cta_clicked: ctaClicked,
     exit_intent_triggered: exitIntentTriggered,
@@ -771,15 +822,27 @@ async function processVisitorProfile(
   }
 
   // Calculate score
-  const score = calculateEngagementScore({
-    visitsCount: sessions.length,
-    totalTimeOnPageMs,
-    maxScrollPercentage: maxScrollPct,
-    visitedKeyPage,
-    ctaClicked,
-    exitIntentTriggered,
-    videoEngaged,
-  })
+  const score = sparseBehavior
+    ? calculateEngagementScoreSparseBehavior({
+        visitsCount: sessions.length,
+        totalTimeOnPageMs,
+        maxScrollPercentage: maxScrollPct,
+        visitedKeyPage,
+        ctaClicked,
+        exitIntentTriggered,
+        videoEngaged,
+        uniquePagesCount: uniquePages,
+        totalEvents: events.length,
+      })
+    : calculateEngagementScore({
+        visitsCount: sessions.length,
+        totalTimeOnPageMs,
+        maxScrollPercentage: maxScrollPct,
+        visitedKeyPage,
+        ctaClicked,
+        exitIntentTriggered,
+        videoEngaged,
+      })
 
   const segment = getEngagementSegment(score)
 

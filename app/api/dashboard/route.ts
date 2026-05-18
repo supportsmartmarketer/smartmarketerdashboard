@@ -25,11 +25,21 @@ export async function GET(request: NextRequest) {
       select: { id: true },
     })
 
-    const activeProcessingUpload = await prisma.upload.findFirst({
-      where: { tenantId, status: { in: ['pending', 'processing'] } },
+    /**
+     * Only the *newest* upload row can represent active work. Older rows stuck in
+     * `processing` would otherwise keep the dashboard map banner / polling running forever
+     * after a newer file has already finished.
+     */
+    const newestUpload = await prisma.upload.findFirst({
+      where: { tenantId },
       orderBy: { createdAt: 'desc' },
-      select: { id: true },
+      select: { id: true, status: true },
     })
+    const processingUploadId =
+      newestUpload &&
+      (newestUpload.status === 'pending' || newestUpload.status === 'processing')
+        ? newestUpload.id
+        : null
 
     // Calculate KPIs
     const totalVisitors = profiles.length
@@ -137,7 +147,7 @@ export async function GET(request: NextRequest) {
       windowStart,
       windowEnd,
       latestUploadId: latestUpload?.id ?? null,
-      processingUploadId: activeProcessingUpload?.id ?? null,
+      processingUploadId,
       metrics: {
         totalVisitors,
         engagedVisitors,

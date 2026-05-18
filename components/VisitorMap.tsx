@@ -35,6 +35,12 @@ export default function VisitorMap({
   const [mapReady, setMapReady] = useState(false)
   const refreshRef = useRef(onRefreshDashboard)
   refreshRef.current = onRefreshDashboard
+  /** Hide “still processing” as soon as this upload finishes (don’t wait for parent refetch) */
+  const [processingDismissed, setProcessingDismissed] = useState(false)
+
+  useEffect(() => {
+    setProcessingDismissed(false)
+  }, [processingUploadId])
 
   // Initialize map only once
   useEffect(() => {
@@ -72,6 +78,7 @@ export default function VisitorMap({
         if (!res.ok) return
         const upload = await res.json()
         if (upload.status === 'completed' || upload.status === 'error') {
+          setProcessingDismissed(true)
           refreshRef.current?.()
         }
       } catch {
@@ -135,7 +142,9 @@ export default function VisitorMap({
   }, [visitors, mapReady])
 
   const coordCount = visitors.filter((v) => v.lat && v.lng).length
-  const isProcessingUpload = Boolean(processingUploadId && tenantId)
+  const isProcessingUpload = Boolean(
+    processingUploadId && tenantId && !processingDismissed
+  )
 
   return (
     <div className="overflow-hidden rounded-xl bg-white shadow-sm border border-gray-200">

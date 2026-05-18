@@ -16,6 +16,13 @@ function formatBannerDate(iso: string) {
   })
 }
 
+function formatPixelFormatLabel(f: string): string {
+  if (f === 'v3') return 'Smart Pixel V3'
+  if (f === 'v4') return 'Smart Pixel V4'
+  if (f === 'unknown') return 'Unknown format'
+  return f
+}
+
 export interface RevenueEstimatorProps {
   uploadId: string
   tenantId: string
@@ -32,10 +39,33 @@ interface UploadPayload {
   totalEvents: number | null
   uniqueVisitors: number | null
   highIntentCount: number | null
+  pixelFormat?: string | null
+}
+
+interface TenantBaselinePayload {
+  uniqueVisitors: number
+  highIntentCount: number
+  totalEvents: number
+  dataStartDate: string | null
+  dataEndDate: string | null
+  completedUploadCount: number
+  pixelFormatsPresent: string[]
+}
+
+type DisplayStats = {
+  uniqueVisitors: number
+  highIntentCount: number
+  dataStartDate: string | null
+  dataEndDate: string | null
+  completedUploadCount: number
+  pixelFormatsPresent: string[]
+  source: 'tenant' | 'upload'
+  thisUploadPixelFormat: string | null
 }
 
 export default function RevenueEstimator({ uploadId, tenantId, embedded = false }: RevenueEstimatorProps) {
   const [upload, setUpload] = useState<UploadPayload | null>(null)
+  const [baseline, setBaseline] = useState<TenantBaselinePayload | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const [matchRate, setMatchRate] = useState(50)
@@ -48,39 +78,62 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
     ;(async () => {
       try {
         const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''
-        const res = await fetch(`/api/upload/${uploadId}${qs}`)
-        if (!res.ok) {
+        const [uploadRes, baselineRes] = await Promise.all([
+          fetch(`/api/upload/${uploadId}${qs}`),
+          tenantId
+            ? fetch(`/api/tenant/${encodeURIComponent(tenantId)}/pixel-revenue-baseline`)
+            : Promise.resolve(null as unknown as Response),
+        ])
+
+        if (!uploadRes.ok) {
           let msg = 'Could not load upload details.'
           try {
-            const errBody = (await res.json()) as { error?: string }
+            const errBody = (await uploadRes.json()) as { error?: string }
             if (errBody?.error) msg = errBody.error
           } catch {
             /* keep default */
           }
-          setLoadError(msg)
+          if (!cancelled) setLoadError(msg)
           return
         }
-        const data = (await res.json()) as UploadPayload
+
+        const data = (await uploadRes.json()) as UploadPayload
+        let bl: TenantBaselinePayload | null = null
+        if (baselineRes && baselineRes.ok) {
+          bl = (await baselineRes.json()) as TenantBaselinePayload
+        }
+
         if (cancelled) return
         setUpload(data)
+        setBaseline(bl)
         setLoadError(null)
 
-        const unique = data.uniqueVisitors ?? 0
-        const start = data.dataStartDate ? new Date(data.dataStartDate).getTime() : null
-        const end = data.dataEndDate ? new Date(data.dataEndDate).getTime() : null
+        const uniqueForMonthly =
+          bl && bl.totalEvents > 0 ? bl.uniqueVisitors : data.uniqueVisitors ?? 0
+        const startMs =
+          bl && bl.totalEvents > 0 && bl.dataStartDate
+            ? new Date(bl.dataStartDate).getTime()
+            : data.dataStartDate
+              ? new Date(data.dataStartDate).getTime()
+              : null
+        const endMs =
+          bl && bl.totalEvents > 0 && bl.dataEndDate
+            ? new Date(bl.dataEndDate).getTime()
+            : data.dataEndDate
+              ? new Date(data.dataEndDate).getTime()
+              : null
 
         let daysInRecord = 1
         let monthly = 0
-
-        if (start != null && end != null && !Number.isNaN(start) && !Number.isNaN(end)) {
-          daysInRecord = Math.max(1, Math.round((end - start) / (1000 * 60 * 60 * 24)))
-          monthly = Math.round((unique / daysInRecord) * 30)
+        if (startMs != null && endMs != null && !Number.isNaN(startMs) && !Number.isNaN(endMs)) {
+          daysInRecord = Math.max(1, Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)))
+          monthly = Math.round((uniqueForMonthly / daysInRecord) * 30)
           if (daysInRecord < 3) {
-            monthly = Math.max(monthly, unique * 4)
+            monthly = Math.max(monthly, uniqueForMonthly * 4)
           }
         } else {
           daysInRecord = 30
-          monthly = unique
+          monthly = uniqueForMonthly
         }
 
         setMonthlyVisitorsInput(monthly)
@@ -93,11 +146,37 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
     }
   }, [uploadId, tenantId])
 
+  const displayStats: DisplayStats | null = useMemo(() => {
+    if (!upload) return null
+    if (baseline && baseline.totalEvents > 0) {
+      return {
+        uniqueVisitors: baseline.uniqueVisitors,
+        highIntentCount: baseline.highIntentCount,
+        dataStartDate: baseline.dataStartDate,
+        dataEndDate: baseline.dataEndDate,
+        completedUploadCount: baseline.completedUploadCount,
+        pixelFormatsPresent: baseline.pixelFormatsPresent,
+        source: 'tenant',
+        thisUploadPixelFormat: upload.pixelFormat ?? null,
+      }
+    }
+    return {
+      uniqueVisitors: upload.uniqueVisitors ?? 0,
+      highIntentCount: upload.highIntentCount ?? 0,
+      dataStartDate: upload.dataStartDate,
+      dataEndDate: upload.dataEndDate,
+      completedUploadCount: 1,
+      pixelFormatsPresent: upload.pixelFormat ? [upload.pixelFormat] : [],
+      source: 'upload',
+      thisUploadPixelFormat: upload.pixelFormat ?? null,
+    }
+  }, [upload, baseline])
+
   const derived = useMemo(() => {
-    const unique = upload?.uniqueVisitors ?? 0
-    const highIntent = upload?.highIntentCount ?? 0
-    const start = upload?.dataStartDate ? new Date(upload.dataStartDate).getTime() : null
-    const end = upload?.dataEndDate ? new Date(upload.dataEndDate).getTime() : null
+    const unique = displayStats?.uniqueVisitors ?? 0
+    const highIntent = displayStats?.highIntentCount ?? 0
+    const start = displayStats?.dataStartDate ? new Date(displayStats.dataStartDate).getTime() : null
+    const end = displayStats?.dataEndDate ? new Date(displayStats.dataEndDate).getTime() : null
 
     let daysInRecord = 1
     if (start != null && end != null && !Number.isNaN(start) && !Number.isNaN(end)) {
@@ -124,9 +203,9 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
       projectedLeads,
       potentialMonthlyRevenue,
       annualRevenuePotential,
-      hasDateRange: Boolean(upload?.dataStartDate && upload?.dataEndDate),
+      hasDateRange: Boolean(displayStats?.dataStartDate && displayStats?.dataEndDate),
     }
-  }, [upload, monthlyVisitorsInput, matchRate, closeRate, avgDealValue])
+  }, [displayStats, monthlyVisitorsInput, matchRate, closeRate, avgDealValue])
 
   if (loadError) {
     return (
@@ -136,7 +215,7 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
     )
   }
 
-  if (!upload) {
+  if (!upload || !displayStats) {
     return (
       <div className="rounded-xl border border-gray-200 bg-white p-6 text-center text-gray-500">
         Loading revenue estimate…
@@ -146,12 +225,24 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
 
   const showSmallSample = derived.hasDateRange && derived.daysInRecord < 14
   const dateCallout =
-    derived.hasDateRange && upload.dataStartDate && upload.dataEndDate ? (
+    derived.hasDateRange && displayStats.dataStartDate && displayStats.dataEndDate ? (
       <p className="text-sm text-gray-800">
         <span aria-hidden>📊 </span>
-        Based on your actual pixel data from{' '}
-        <strong>{formatBannerDate(upload.dataStartDate)}</strong> to{' '}
-        <strong>{formatBannerDate(upload.dataEndDate)}</strong> ({derived.daysInRecord} days)
+        {displayStats.source === 'tenant' ? (
+          <>
+            Combined across <strong>{displayStats.completedUploadCount}</strong> processed upload
+            {displayStats.completedUploadCount === 1 ? '' : 's'} for this client, from{' '}
+            <strong>{formatBannerDate(displayStats.dataStartDate)}</strong> to{' '}
+            <strong>{formatBannerDate(displayStats.dataEndDate)}</strong> ({derived.daysInRecord}{' '}
+            days)
+          </>
+        ) : (
+          <>
+            Based on your actual pixel data from <strong>{formatBannerDate(displayStats.dataStartDate)}</strong>{' '}
+            to <strong>{formatBannerDate(displayStats.dataEndDate)}</strong> ({derived.daysInRecord}{' '}
+            days)
+          </>
+        )}
       </p>
     ) : (
       <p className="text-sm text-amber-900">
@@ -159,6 +250,25 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
         unique visitor count without day-based extrapolation.
       </p>
     )
+
+  const formatLine =
+    displayStats.pixelFormatsPresent.length > 0 ? (
+      <p className="mt-2 text-xs text-gray-600">
+        Detected pixel file format{displayStats.pixelFormatsPresent.length === 1 ? '' : 's'} in use:{' '}
+        {displayStats.pixelFormatsPresent.map(formatPixelFormatLabel).join(', ')}
+        {displayStats.thisUploadPixelFormat ? (
+          <>
+            . This upload:{' '}
+            <strong>{formatPixelFormatLabel(displayStats.thisUploadPixelFormat)}</strong>.
+          </>
+        ) : null}
+      </p>
+    ) : displayStats.thisUploadPixelFormat ? (
+      <p className="mt-2 text-xs text-gray-600">
+        This upload:{' '}
+        <strong>{formatPixelFormatLabel(displayStats.thisUploadPixelFormat)}</strong>.
+      </p>
+    ) : null
 
   const shellClass = embedded
     ? 'bg-white px-5 py-6 sm:px-6'
@@ -171,6 +281,7 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
           Based on your actual pixel data
         </p>
         <div className="mt-2">{dateCallout}</div>
+        {formatLine}
       </div>
 
       {showSmallSample && (
@@ -196,6 +307,9 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
             />
             <p className="mt-1 text-xs text-gray-500">
               Extrapolated from unique visitors ÷ days in file × 30 (editable).
+              {displayStats.source === 'tenant'
+                ? ' Unique visitors are deduplicated across all uploads for this client.'
+                : ''}
             </p>
           </div>
 
@@ -295,14 +409,22 @@ export default function RevenueEstimator({ uploadId, tenantId, embedded = false 
             data — not the conservative 10% often cited. This is based on actual performance.
           </li>
           <li>
-            <strong>High-intent filter:</strong> Only visitors who visited key pages (pricing,
-            contact, demo, checkout), clicked CTAs, or showed exit intent are counted as high-intent
-            leads in your scoring model.
+            <strong>High-intent filter:</strong> Visitors are scored from page depth, repeat sessions,
+            key URLs (pricing, contact, etc.), and rich event streams when present (Smart Pixel V3).
+            V4 files without dwell-time or scroll events use URL/session depth instead so totals stay
+            realistic.
           </li>
           <li>
             <strong>Extrapolation:</strong> Your {derived.daysInRecord}-day pixel sample was scaled
             to 30 days using: (unique visitors in file ÷ days in record) × 30.
           </li>
+          {displayStats.source === 'tenant' && (
+            <li>
+              <strong>Multiple files:</strong> When you upload both V3 and V4 for the same client,
+              revenue math uses deduplicated visitors and the full date span across all completed
+              uploads.
+            </li>
+          )}
         </ul>
       </details>
     </div>

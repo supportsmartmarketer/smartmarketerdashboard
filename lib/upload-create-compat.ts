@@ -26,6 +26,8 @@ function bareUploadRow(
     highIntentCount: null,
     visitorProfileTotal: null,
     visitorProfileProcessed: null,
+    pixelFormat: null,
+    ingestAux: null,
   }
 }
 

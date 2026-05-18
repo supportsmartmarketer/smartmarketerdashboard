@@ -41,6 +41,54 @@ export function calculateEngagementScore(input: ScoringInput): number {
   return score
 }
 
+/** V4-style rows often lack time-on-page / scroll; approximate “depth” from pages + volume. */
+export interface ScoringInputSparseBehavior extends ScoringInput {
+  uniquePagesCount: number
+  totalEvents: number
+}
+
+export function calculateEngagementScoreSparseBehavior(input: ScoringInputSparseBehavior): number {
+  let score = 0
+  if (input.visitsCount >= 2) score += 2
+  if (input.uniquePagesCount >= 3) score += 2
+  else if (input.uniquePagesCount >= 2) score += 1
+  if (input.visitedKeyPage) score += 2
+  if (input.ctaClicked) score += 3
+  if (input.exitIntentTriggered) score += 3
+  if (input.videoEngaged) score += 2
+  if (input.totalEvents >= 4) score += 1
+  if (input.totalEvents >= 8) score += 1
+  return Math.min(15, score)
+}
+
+type SparseEventShape = {
+  timeOnPageMs?: number
+  scrollPct?: number | null
+  eventType?: string | null
+}
+
+/**
+ * True when exported rows have no dwell/scroll signals and look like URL-only hits (typical V4).
+ */
+export function eventsHaveSparseBehavioralSignals(events: SparseEventShape[]): boolean {
+  if (events.length === 0) return false
+  const noDwellOrScroll = events.every(
+    (e) =>
+      !e.timeOnPageMs &&
+      (e.scrollPct == null || e.scrollPct === 0)
+  )
+  if (!noDwellOrScroll) return false
+  return events.every((e) => {
+    const et = (e.eventType || '').toLowerCase()
+    return (
+      !et ||
+      et.includes('page_view') ||
+      et.includes('pageview') ||
+      et === 'view'
+    )
+  })
+}
+
 /**
  * Get engagement segment from score
  */
