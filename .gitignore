@@ -37,6 +37,9 @@ yarn-error.log*
 githubtoken
 env.sh
 
+# local chat/support transcripts
+Chat Transcript at 5-19-2026.txt
+
 # local pixel export dumps (often large / sensitive)
 pixel_export_*.csv
 Freedom Heavy Haul V4.csv
