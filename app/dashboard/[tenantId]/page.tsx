@@ -14,6 +14,7 @@ import RevenueEstimator from '@/components/RevenueEstimator'
 interface DashboardData {
   windowStart: string
   windowEnd: string
+  showFinancialInsights: boolean
   latestUploadId: string | null
   processingUploadId: string | null
   metrics: {
@@ -72,6 +73,26 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [revenueExpanded, setRevenueExpanded] = useState(true)
   const [autoSummaryState, setAutoSummaryState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [financialTogglePending, setFinancialTogglePending] = useState(false)
+
+  const patchFinancialInsights = async (next: boolean) => {
+    setFinancialTogglePending(true)
+    try {
+      const res = await fetch(`/api/tenants/${tenantId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showFinancialInsights: next }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        alert((err as { error?: string }).error || 'Could not update setting')
+        return
+      }
+      await fetchDashboard(false)
+    } finally {
+      setFinancialTogglePending(false)
+    }
+  }
 
   const fetchDashboard = useCallback(async (isInitialLoad = false) => {
     if (isInitialLoad) {
@@ -196,7 +217,17 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-[#1D6E95] focus:ring-[#1D6E95]"
+              checked={data.showFinancialInsights}
+              disabled={financialTogglePending || loading || refreshing}
+              onChange={(e) => void patchFinancialInsights(e.target.checked)}
+            />
+            <span>Show revenue &amp; financial forecasts</span>
+          </label>
           <button
             onClick={() => fetchDashboard(false)}
             disabled={loading || refreshing}
@@ -219,17 +250,22 @@ export default function DashboardPage() {
 
       {/* KPI Cards */}
       <div className="mb-6">
-        <KPICards metrics={data.metrics} estMonthlyRevenue={estMonthlyRevenue} />
+        <KPICards
+          metrics={data.metrics}
+          estMonthlyRevenue={data.showFinancialInsights ? estMonthlyRevenue : undefined}
+        />
       </div>
 
-      <ROICalculator
-        key={tenantId}
-        tenantId={tenantId}
-        reportWindow={window}
-        metrics={data.metrics}
-      />
+      {data.showFinancialInsights && (
+        <ROICalculator
+          key={tenantId}
+          tenantId={tenantId}
+          reportWindow={window}
+          metrics={data.metrics}
+        />
+      )}
 
-      {data.latestUploadId && (
+      {data.showFinancialInsights && data.latestUploadId && (
         <div className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <button
             type="button"

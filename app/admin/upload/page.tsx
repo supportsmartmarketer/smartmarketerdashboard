@@ -9,6 +9,7 @@ interface Tenant {
   id: string
   name: string
   domain: string | null
+  showFinancialInsights?: boolean
 }
 
 interface UploadStatus {
@@ -53,6 +54,24 @@ export default function UploadPage() {
   useEffect(() => {
     fetchTenants()
   }, [])
+
+  const patchTenantFinancial = async (tenantId: string, showFinancialInsights: boolean) => {
+    const res = await fetch(`/api/tenants/${tenantId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showFinancialInsights }),
+    })
+    if (res.ok) await fetchTenants()
+    else {
+      const err = await res.json().catch(() => ({}))
+      alert((err as { error?: string }).error || 'Could not update setting')
+    }
+  }
+
+  const selectedTenantShowsFinancial = () => {
+    const t = tenants.find((x) => x.id === selectedTenantId)
+    return t?.showFinancialInsights !== false
+  }
 
   const fetchTenants = async () => {
     try {
@@ -387,8 +406,30 @@ export default function UploadPage() {
           <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
             Upload complete. Redirecting to dashboard to generate AI summary...
           </div>
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Revenue estimate</h2>
-          <RevenueEstimator uploadId={completedUploadId} tenantId={selectedTenantId} />
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-gray-300 text-[#1D6E95] focus:ring-[#1D6E95]"
+                checked={selectedTenantShowsFinancial()}
+                onChange={(e) =>
+                  void patchTenantFinancial(selectedTenantId, e.target.checked)
+                }
+              />
+              <span>
+                <strong>Show revenue &amp; financial forecasts</strong> for this client (dashboard KPI
+                revenue, ROI forecast, upload revenue estimate). Turn off for a simplified view.
+              </span>
+            </label>
+          </div>
+
+          {selectedTenantShowsFinancial() && (
+            <>
+              <h2 className="mb-4 text-lg font-semibold text-gray-900">Revenue estimate</h2>
+              <RevenueEstimator uploadId={completedUploadId} tenantId={selectedTenantId} />
+            </>
+          )}
           <div className="mt-6">
             <Link
               href={`/dashboard/${selectedTenantId}`}

@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
       data: {
         name,
         domain: domain || null,
+        showFinancialInsights: typeof body.showFinancialInsights === 'boolean' ? body.showFinancialInsights : true,
       },
     })
 

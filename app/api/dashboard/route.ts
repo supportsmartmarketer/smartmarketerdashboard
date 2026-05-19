@@ -15,6 +15,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'tenantId is required' }, { status: 400 })
     }
 
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { showFinancialInsights: true },
+    })
+    if (!tenant) {
+      return NextResponse.json({ error: 'Tenant not found' }, { status: 404 })
+    }
+
     const { windowStart, windowEnd } = parseDashboardWindowParam(window)
 
     const profiles = await loadProfilesActiveInCalendarWindow(tenantId, windowStart, windowEnd)
@@ -146,6 +154,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       windowStart,
       windowEnd,
+      showFinancialInsights: tenant.showFinancialInsights,
       latestUploadId: latestUpload?.id ?? null,
       processingUploadId,
       metrics: {

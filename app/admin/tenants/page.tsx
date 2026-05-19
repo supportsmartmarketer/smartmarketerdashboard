@@ -8,13 +8,14 @@ interface Tenant {
   name: string
   domain: string | null
   createdAt: string
+  showFinancialInsights?: boolean
 }
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [formData, setFormData] = useState({ name: '', domain: '' })
+  const [formData, setFormData] = useState({ name: '', domain: '', showFinancialInsights: true })
 
   useEffect(() => {
     fetchTenants()
@@ -40,6 +41,23 @@ export default function TenantsPage() {
     }
   }
 
+  const handleToggleFinancial = async (id: string, next: boolean) => {
+    try {
+      const res = await fetch(`/api/tenants/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showFinancialInsights: next }),
+      })
+      if (res.ok) fetchTenants()
+      else {
+        const err = await res.json().catch(() => ({}))
+        alert((err as { error?: string }).error || 'Failed to update')
+      }
+    } catch {
+      alert('Failed to update')
+    }
+  }
+
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete client "${name}" and all their data (uploads, events, visitors)? This cannot be undone.`)) return
     try {
@@ -62,10 +80,14 @@ export default function TenantsPage() {
       const res = await fetch('/api/tenants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          name: formData.name,
+          domain: formData.domain,
+          showFinancialInsights: formData.showFinancialInsights,
+        }),
       })
       if (res.ok) {
-        setFormData({ name: '', domain: '' })
+        setFormData({ name: '', domain: '', showFinancialInsights: true })
         setShowForm(false)
         fetchTenants()
       } else {
@@ -127,6 +149,20 @@ export default function TenantsPage() {
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:outline-none focus:border-[#1D6E95] focus:ring-1 focus:ring-[#1D6E95]"
               />
             </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="showFinancialNew"
+                checked={formData.showFinancialInsights}
+                onChange={(e) =>
+                  setFormData({ ...formData, showFinancialInsights: e.target.checked })
+                }
+                className="h-4 w-4 rounded border-gray-300 text-[#1D6E95] focus:ring-[#1D6E95]"
+              />
+              <label htmlFor="showFinancialNew" className="text-sm text-gray-700">
+                Show revenue &amp; financial forecasts (dashboard &amp; upload)
+              </label>
+            </div>
             <button
               type="submit"
               className="rounded-md px-4 py-2 text-white btn-primary-blue"
@@ -151,6 +187,9 @@ export default function TenantsPage() {
                 Created
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                Financial UI
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                 Actions
               </th>
             </tr>
@@ -158,7 +197,7 @@ export default function TenantsPage() {
           <tbody className="divide-y divide-gray-200 bg-white">
             {tenants.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-6 py-4 text-center text-gray-500">
+                <td colSpan={5} className="px-6 py-4 text-center text-gray-500">
                   No clients yet. Create one to get started.
                 </td>
               </tr>
@@ -173,6 +212,19 @@ export default function TenantsPage() {
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                     {new Date(tenant.createdAt).toLocaleDateString()}
+                  </td>
+                  <td className="whitespace-nowrap px-6 py-4 text-sm">
+                    <label className="inline-flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 text-[#1D6E95] focus:ring-[#1D6E95]"
+                        checked={tenant.showFinancialInsights !== false}
+                        onChange={(e) => handleToggleFinancial(tenant.id, e.target.checked)}
+                      />
+                      <span className="text-xs text-gray-600">
+                        {tenant.showFinancialInsights !== false ? 'On' : 'Off'}
+                      </span>
+                    </label>
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                     <div className="flex items-center gap-3">

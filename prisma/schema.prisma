@@ -14,6 +14,8 @@ model Tenant {
   name      String
   domain    String?
   createdAt DateTime @default(now()) @map("created_at")
+  /** When false, dashboard & upload hide revenue / ROI / forecast sections for this client */
+  showFinancialInsights Boolean @default(true) @map("show_financial_insights")
 
   uploads          Upload[]
   rawEvents        RawEvent[]

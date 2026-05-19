@@ -148,9 +148,16 @@ async function fetchFromIpApi(ip: string, apiKey?: string): Promise<GeoLocation 
   }
 }
 
-// Rate limiting for geocoding (1 request per second)
+// Rate limiting for geocoding (Nominatim public API: ~1 request per second for bulk use)
 let lastGeocodeTime = 0
-const GEOCODE_RATE_LIMIT_MS = 1000
+const GEOCODE_RATE_LIMIT_MS = 1100
+
+function nominatimUserAgent(): string {
+  const fromEnv = process.env.NOMINATIM_USER_AGENT?.trim()
+  if (fromEnv) return fromEnv
+  // Nominatim policy: identifiable application + contact; generic UAs often get HTTP 403 from cloud hosts.
+  return 'SmartMarketerDashboard/1.0 (https://github.com/arsalanrs/smartmarketerdashboard — set NOMINATIM_USER_AGENT with your contact email)'
+}
 
 /**
  * Geocode address to coordinates using OpenStreetMap Nominatim (free, no API key needed)
@@ -185,18 +192,25 @@ export async function geocodeAddress(
     }
     lastGeocodeTime = Date.now()
     
-    // Use OpenStreetMap Nominatim (free, no API key required)
-    // Note: Be respectful with rate limits (max 1 request per second)
+    // OpenStreetMap Nominatim — https://operations.osmfoundation.org/policies/nominatim/
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressString)}&limit=1`
-    
+
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'SmartMarketer/1.0', // Required by Nominatim
+        'User-Agent': nominatimUserAgent(),
+        Accept: 'application/json',
+        'Accept-Language': 'en',
       },
     })
 
     if (!response.ok) {
-      console.warn(`Geocoding failed for address: ${addressString}`)
+      const hint =
+        response.status === 403
+          ? ' — Nominatim often returns 403 for cloud IPs or missing contact in User-Agent; set env NOMINATIM_USER_AGENT=MyApp/1.0 (you@company.com) or use a paid geocoder'
+          : response.status === 429
+            ? ' — rate limited; add delay between requests or use a paid geocoder'
+            : ''
+      console.warn(`Geocoding failed for address: ${addressString} (HTTP ${response.status})${hint}`)
       return null
     }
 
