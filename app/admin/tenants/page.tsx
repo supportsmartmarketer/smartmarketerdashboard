@@ -58,6 +58,27 @@ export default function TenantsPage() {
     }
   }
 
+  const handleClearData = async (id: string, name: string) => {
+    if (
+      !confirm(
+        `Clear all data for "${name}"?\n\nThis removes uploads, events, visitor profiles, and AI summaries. The client stays (same link/settings) so you can upload fresh files.\n\nThis cannot be undone.`
+      )
+    )
+      return
+    try {
+      const res = await fetch(`/api/tenants/${id}/data`, { method: 'DELETE' })
+      if (res.ok) {
+        fetchTenants()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        alert((err as { error?: string }).error || 'Failed to clear data')
+      }
+    } catch (error) {
+      console.error('Error clearing tenant data:', error)
+      alert('Failed to clear data')
+    }
+  }
+
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete client "${name}" and all their data (uploads, events, visitors)? This cannot be undone.`)) return
     try {
@@ -227,13 +248,20 @@ export default function TenantsPage() {
                     </label>
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <Link
                         href={`/dashboard/${tenant.id}`}
                         className="link-primary-blue"
                       >
                         View Dashboard
                       </Link>
+                      <button
+                        type="button"
+                        onClick={() => handleClearData(tenant.id, tenant.name)}
+                        className="text-amber-700 hover:text-amber-900 text-sm font-medium"
+                      >
+                        Clear data
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleDelete(tenant.id, tenant.name)}
