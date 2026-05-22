@@ -5,6 +5,7 @@ import {
   normalizePriorityAction,
   normalizeRevenueInsights,
 } from '@/lib/ai-summary'
+import { buildPixelReportingContext } from '@/lib/ai-summary-pixel-context'
 import { prisma } from '@/lib/prisma'
 import {
   loadProfilesActiveInCalendarWindow,
@@ -147,6 +148,13 @@ export async function POST(request: NextRequest) {
       highIntentVisitorsList,
     }
 
+    const pixelReporting = await buildPixelReportingContext({
+      tenantId,
+      windowStart,
+      windowEnd,
+      profiles,
+    })
+
     // Generate summary
     const summary = await getOrGenerateSummary(
       tenantId,
@@ -154,7 +162,8 @@ export async function POST(request: NextRequest) {
       windowEnd,
       metrics,
       forceRegenerate,
-      roiContext
+      roiContext,
+      pixelReporting
     )
 
     return NextResponse.json(summary)
