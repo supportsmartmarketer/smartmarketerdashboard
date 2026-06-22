@@ -13,6 +13,7 @@
     "db:push": "prisma db push",
     "verify:v3": "npx tsx scripts/verify-v3-pixel-path.ts",
     "verify:v4": "npx tsx scripts/verify-v3-pixel-path.ts \"Freedom Heavy Haul V4.csv\"",
+    "verify:v4-events": "npx tsx scripts/test-fhh-events.ts",
     "dry-run:csv": "node scripts/dry-run-pixel-csv.mjs"
   },
   "dependencies": {

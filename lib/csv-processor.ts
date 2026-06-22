@@ -10,6 +10,7 @@ import {
   isKeyPage,
   isCTAClick,
   isExitIntent,
+  isFormSubmit,
   isVideoEngaged,
   VisitorFlags,
 } from './scoring'
@@ -187,6 +188,114 @@ function pickReferrerFromColumns(row: CSVRow): string | undefined {
     row['referrer'] ||
     undefined
   )
+}
+
+function pickEventsColumn(row: CSVRow): string | undefined {
+  const raw = row['EVENTS'] || row['Events'] || row['events']
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+}
+
+function absolutizePathOrUrl(pathOrUrl: string, fullUrl?: string): string {
+  if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) return pathOrUrl
+  if (fullUrl) {
+    try {
+      const origin = new URL(fullUrl).origin
+      return pathOrUrl.startsWith('/') ? `${origin}${pathOrUrl}` : `${origin}/${pathOrUrl}`
+    } catch {
+      /* ignore */
+    }
+  }
+  return pathOrUrl
+}
+
+function urlFromV4EventProperties(
+  props: Record<string, unknown> | undefined,
+  fallbackFullUrl?: string
+): string | undefined {
+  if (!props) return fallbackFullUrl
+  const urlVal = props.url ?? props.URL
+  if (typeof urlVal === 'string' && urlVal.trim()) {
+    const u = urlVal.trim()
+    return u.startsWith('http') ? u : absolutizePathOrUrl(u, fallbackFullUrl)
+  }
+  const pathVal = props.path ?? props.PATH
+  if (typeof pathVal === 'string' && pathVal.trim()) {
+    return absolutizePathOrUrl(pathVal.trim(), fallbackFullUrl)
+  }
+  return fallbackFullUrl
+}
+
+type V4EventsColumnItem = {
+  event?: string
+  received_at?: string
+  properties?: Record<string, unknown>
+}
+
+/**
+ * Expand V4 EVENTS JSON array (page_view, deep_scroll, form_submit, exit_intent, …) into multiple ProcessedEvents.
+ */
+function parseV4EventsColumn(row: CSVRow, base: ProcessedEvent): ProcessedEvent[] | null {
+  const eventsJson = pickEventsColumn(row)
+  if (!eventsJson?.startsWith('[')) return null
+
+  let items: V4EventsColumnItem[]
+  try {
+    const parsed = JSON.parse(eventsJson) as unknown
+    if (!Array.isArray(parsed) || parsed.length === 0) return null
+    items = parsed as V4EventsColumnItem[]
+  } catch {
+    return null
+  }
+
+  const fallbackFullUrl = pickUrlFromColumns(row)
+  const referrerUrl = base.referrerUrl || pickReferrerFromColumns(row)
+  const out: ProcessedEvent[] = []
+
+  for (const item of items) {
+    const eventTs = normalizeTimestamp(item.received_at) ?? base.eventTs
+    const props = item.properties
+    const url = urlFromV4EventProperties(props, fallbackFullUrl)
+
+    let scrollPct: number | undefined
+    const scrollRaw = props?.scrollDepth ?? props?.scroll_depth ?? props?.percentage
+    if (scrollRaw != null) {
+      const n = typeof scrollRaw === 'number' ? scrollRaw : parseFloat(String(scrollRaw))
+      if (!Number.isNaN(n)) scrollPct = Math.max(0, Math.min(100, n))
+    }
+
+    const formId = props?.formId ?? props?.form_id
+    const elementIdentifier =
+      typeof formId === 'string' && formId.trim() ? formId.trim() : undefined
+
+    out.push({
+      visitorKey: base.visitorKey,
+      uuid: base.uuid,
+      ip: base.ip,
+      eventTs,
+      eventType: item.event?.trim() || 'page_view',
+      url,
+      referrerUrl,
+      scrollPct,
+      elementIdentifier,
+      rawJson: row,
+    })
+  }
+
+  return out.length > 0 ? out : null
+}
+
+/**
+ * One CSV row → one or many ProcessedEvents (V4 EVENTS column expands to full journey).
+ */
+export function parseRowsFromCsvRow(row: CSVRow): ProcessedEvent[] {
+  const base = parseRow(row)
+  if (!base) return []
+  const expanded = parseV4EventsColumn(row, base)
+  if (expanded) {
+    for (const e of expanded) e.rawJson = undefined
+    return expanded
+  }
+  return [base]
 }
 
 /**
@@ -508,8 +617,8 @@ export async function processCSVUploadFromStream(
         const rows = Array.isArray(results.data) ? results.data : [results.data].filter(Boolean) as CSVRow[]
         for (const row of rows) {
           savePixelFormatOnce(row)
-          const event = parseRow(row)
-          if (event) {
+          const parsedEvents = parseRowsFromCsvRow(row)
+          for (const event of parsedEvents) {
             // Strip rawJson from the event to save memory - identity captured separately
             event.rawJson = undefined
             batch.push(event)
@@ -662,8 +771,8 @@ export async function processCSVUpload(
           pixelFormatSaved = true
           await safeUploadSetPixelFormat(uploadId, fmt)
         }
-        const event = parseRow(row)
-        if (event) {
+        const parsedEvents = parseRowsFromCsvRow(row)
+        for (const event of parsedEvents) {
           event.rawJson = undefined // don't store full row in DB
           batch.push(event)
           visitorKeys.add(event.visitorKey)
@@ -804,7 +913,9 @@ async function processVisitorProfile(
 
   // Calculate flags
   const visitedKeyPage = events.some((e) => isKeyPage(e.url))
-  const ctaClicked = events.some((e) => isCTAClick(e.elementIdentifier, e.url))
+  const ctaClicked = events.some(
+    (e) => isCTAClick(e.elementIdentifier, e.url) || isFormSubmit(e.eventType)
+  )
   const exitIntentTriggered = events.some((e) => isExitIntent(e.eventType))
   const videoEngaged = events.some((e) => isVideoEngaged(e.eventType))
 

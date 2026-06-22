@@ -448,9 +448,11 @@ export default function UploadPage() {
             <li>
               <strong>Smart Pixel V3</strong> exports include <code className="text-xs">EVENT_DATA</code>,{' '}
               <code className="text-xs">EVENT_TYPE</code>, <code className="text-xs">IP_ADDRESS</code>, and
-              behavioral timestamps. <strong>V4</strong> exports use <code className="text-xs">FULL_URL</code>,{' '}
-              <code className="text-xs">REFERRER_URL</code>, and <code className="text-xs">EVENT_TIMESTAMP</code>{' '}
-              (no <code className="text-xs">EVENT_DATA</code> column). The uploader detects V3 vs V4 automatically.
+              behavioral timestamps.               <strong>V4</strong> exports use <code className="text-xs">FULL_URL</code>,{' '}
+              <code className="text-xs">REFERRER_URL</code>, and <code className="text-xs">EVENT_TIMESTAMP</code>, plus
+              an <code className="text-xs">EVENTS</code> JSON column (page views, deep scroll, form submit, exit intent,
+              etc.) when Audience Lab includes behavioral data. The uploader expands <code className="text-xs">EVENTS</code>{' '}
+              into full timelines and detects V3 vs V4 automatically.
             </li>
             <li>
               Revenue estimates use <strong>all completed uploads</strong> for the selected client (V3 and V4

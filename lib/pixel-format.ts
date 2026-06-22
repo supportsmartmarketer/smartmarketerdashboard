@@ -1,6 +1,7 @@
 /**
- * Smart Pixel CSV exports: V3 carries rich behavioral JSON in EVENT_DATA; V4 uses FULL_URL
- * and omits EVENT_DATA (identity / URL columns only for many rows).
+ * Smart Pixel CSV exports:
+ * - V3: rich behavioral JSON in EVENT_DATA (+ often EVENT_TYPE per row)
+ * - V4: FULL_URL + identity columns; behavioral array often in EVENTS (JSON), not EVENT_DATA
  */
 export type PixelFormat = 'v3' | 'v4' | 'unknown'
 

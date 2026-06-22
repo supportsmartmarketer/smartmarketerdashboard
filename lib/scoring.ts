@@ -119,6 +119,13 @@ export function isCTAClick(elementIdentifier: string | null | undefined, url: st
   return ctaKeywords.some((keyword) => combined.includes(keyword))
 }
 
+/** V4 EVENTS column uses event types like form_submit */
+export function isFormSubmit(eventType: string | null | undefined): boolean {
+  if (!eventType) return false
+  const lower = eventType.toLowerCase()
+  return lower.includes('form_submit') || lower === 'formsubmit'
+}
+
 /**
  * Check if event type indicates exit intent
  */
