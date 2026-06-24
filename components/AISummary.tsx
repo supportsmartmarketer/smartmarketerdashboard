@@ -7,6 +7,8 @@ import { getRoiContextForApi } from '@/lib/roi-storage'
 interface AISummaryProps {
   tenantId: string
   window: string
+  /** When an upload is still processing, summary metrics may be incomplete */
+  uploadProcessing?: boolean
 }
 
 interface PriorityAction {
@@ -91,23 +93,57 @@ function normalizeSummary(data: Record<string, unknown>): Summary {
     revenueInsights = ri.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
   }
 
+  const recommendedActions: string[] = Array.isArray(data.recommendedActions)
+    ? data.recommendedActions
+        .map((item) => {
+          if (typeof item === 'string') return item.trim()
+          if (item && typeof item === 'object') {
+            const o = item as Record<string, unknown>
+            if (typeof o.action === 'string') return o.action.trim()
+            if (typeof o.recommendation === 'string') return o.recommendation.trim()
+            if (typeof o.text === 'string') return o.text.trim()
+          }
+          return ''
+        })
+        .filter((s) => s.length > 0)
+    : []
+
+  const notableSegments: Summary['notableSegments'] = Array.isArray(data.notableSegments)
+    ? data.notableSegments
+        .map((item) => {
+          if (!item || typeof item !== 'object') return null
+          const o = item as Record<string, unknown>
+          const segment =
+            typeof o.segment === 'string'
+              ? o.segment.trim()
+              : typeof o.name === 'string'
+                ? o.name.trim()
+                : ''
+          const description =
+            typeof o.description === 'string'
+              ? o.description.trim()
+              : typeof o.summary === 'string'
+                ? o.summary.trim()
+                : ''
+          if (!segment && !description) return null
+          return { segment: segment || 'Segment', description }
+        })
+        .filter((s): s is Summary['notableSegments'][number] => s !== null)
+    : []
+
   return {
     id: String(data.id ?? ''),
     executiveSummary: String(data.executiveSummary ?? ''),
     keyObservations,
-    recommendedActions: Array.isArray(data.recommendedActions)
-      ? (data.recommendedActions as string[])
-      : [],
-    notableSegments: Array.isArray(data.notableSegments)
-      ? (data.notableSegments as Summary['notableSegments'])
-      : [],
+    recommendedActions,
+    notableSegments,
     priorityAction,
     revenueInsights,
     createdAt: String(data.createdAt ?? ''),
   }
 }
 
-export default function AISummary({ tenantId, window }: AISummaryProps) {
+export default function AISummary({ tenantId, window, uploadProcessing = false }: AISummaryProps) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -185,10 +221,15 @@ export default function AISummary({ tenantId, window }: AISummaryProps) {
             </button>
             <button
               onClick={generateSummary}
-              disabled={loading}
+              disabled={loading || uploadProcessing}
+              title={
+                uploadProcessing
+                  ? 'Wait for the upload to finish processing before generating a summary'
+                  : undefined
+              }
               className="rounded-md px-3 py-1 text-sm text-white disabled:opacity-50 btn-primary-blue"
             >
-              {loading ? 'Generating...' : 'Generate Summary'}
+              {loading ? 'Generating...' : uploadProcessing ? 'Upload processing…' : 'Generate Summary'}
             </button>
           </div>
         </div>

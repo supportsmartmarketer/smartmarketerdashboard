@@ -95,53 +95,79 @@ export default function VisitorMap({
   useEffect(() => {
     if (!mapRef.current || !initializedRef.current || !mapReady) return
 
+    let cancelled = false
+
     import('leaflet').then((L) => {
-      markersRef.current.forEach((marker) => {
-        mapRef.current.removeLayer(marker)
-      })
-      markersRef.current = []
+      if (cancelled || !mapRef.current) return
 
-      const visitorsWithCoords = visitors.filter((v) => v.lat && v.lng)
+      try {
+        markersRef.current.forEach((marker) => {
+          if (mapRef.current) mapRef.current.removeLayer(marker)
+        })
+        markersRef.current = []
 
-      visitorsWithCoords.forEach((visitor) => {
-        const color =
-          visitor.engagementScore >= 9 ? '#FF8C02' :
-          visitor.engagementScore >= 6 ? '#FF8C02' :
-          visitor.engagementScore >= 3 ? '#1D6E95' :
-          '#6b7280'
+        const visitorsWithCoords = visitors.filter(
+          (v) =>
+            typeof v.lat === 'number' &&
+            typeof v.lng === 'number' &&
+            Number.isFinite(v.lat) &&
+            Number.isFinite(v.lng)
+        )
 
-        const marker = L.default.circleMarker([visitor.lat!, visitor.lng!], {
-          radius: 6,
-          fillColor: color,
-          color: '#fff',
-          weight: 1,
-          opacity: 1,
-          fillOpacity: 0.7,
-        }).addTo(mapRef.current)
+        visitorsWithCoords.forEach((visitor) => {
+          if (!mapRef.current) return
 
-        marker.bindPopup(`
+          const color =
+            visitor.engagementScore >= 9 ? '#FF8C02' :
+            visitor.engagementScore >= 6 ? '#FF8C02' :
+            visitor.engagementScore >= 3 ? '#1D6E95' :
+            '#6b7280'
+
+          const marker = L.default.circleMarker([visitor.lat!, visitor.lng!], {
+            radius: 6,
+            fillColor: color,
+            color: '#fff',
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.7,
+          }).addTo(mapRef.current)
+
+          marker.bindPopup(`
           <div style="padding: 8px;">
             <p style="font-weight: 600; margin-bottom: 4px;">Visitor: ${visitor.visitorKey.slice(-6)}</p>
             <p style="margin: 2px 0;">Score: ${visitor.engagementScore}</p>
             <p style="margin: 2px 0;">Visits: ${visitor.visitsCount}</p>
-            <p style="margin: 2px 0;">Time: ${Math.round(visitor.totalTimeOnPageMs / 1000)}s</p>
+            <p style="margin: 2px 0;">Time: ${Math.round((Number(visitor.totalTimeOnPageMs) || 0) / 1000)}s</p>
             ${visitor.city ? `<p style="margin: 2px 0;">Location: ${visitor.city}</p>` : ''}
           </div>
         `)
 
-        markersRef.current.push(marker)
-      })
+          markersRef.current.push(marker)
+        })
 
-      if (visitorsWithCoords.length > 0) {
-        const bounds = L.default.latLngBounds(
-          visitorsWithCoords.map((v) => [v.lat!, v.lng!])
-        )
-        mapRef.current.fitBounds(bounds, { padding: [20, 20] })
+        if (visitorsWithCoords.length > 0 && mapRef.current) {
+          const bounds = L.default.latLngBounds(
+            visitorsWithCoords.map((v) => [v.lat!, v.lng!])
+          )
+          mapRef.current.fitBounds(bounds, { padding: [20, 20] })
+        }
+      } catch (err) {
+        console.warn('Visitor map update skipped:', err)
       }
     })
+
+    return () => {
+      cancelled = true
+    }
   }, [visitors, mapReady])
 
-  const coordCount = visitors.filter((v) => v.lat && v.lng).length
+  const coordCount = visitors.filter(
+    (v) =>
+      typeof v.lat === 'number' &&
+      typeof v.lng === 'number' &&
+      Number.isFinite(v.lat) &&
+      Number.isFinite(v.lng)
+  ).length
   const isProcessingUpload = Boolean(
     processingUploadId && tenantId && !processingDismissed
   )

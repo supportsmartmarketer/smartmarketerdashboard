@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   getOrGenerateSummary,
   normalizeKeyObservations,
+  normalizeNotableSegments,
   normalizePriorityAction,
+  normalizeRecommendedActions,
   normalizeRevenueInsights,
 } from '@/lib/ai-summary'
 import { buildPixelReportingContext } from '@/lib/ai-summary-pixel-context'
@@ -40,8 +42,8 @@ export async function GET(request: NextRequest) {
         id: summary.id,
         executiveSummary: summary.executiveSummary,
         keyObservations: normalizeKeyObservations(summary.keyObservations),
-        recommendedActions: summary.recommendedActions,
-        notableSegments: summary.notableSegments,
+        recommendedActions: normalizeRecommendedActions(summary.recommendedActions),
+        notableSegments: normalizeNotableSegments(summary.notableSegments),
         priorityAction: normalizePriorityAction(summary.priorityAction),
         revenueInsights: normalizeRevenueInsights(summary.revenueInsights),
         createdAt: summary.createdAt,

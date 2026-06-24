@@ -212,10 +212,10 @@ export default function VisitorList({ visitors, onVisitorClick }: VisitorListPro
                       {visitor.visitsCount}
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
-                      {Math.round(visitor.totalTimeOnPageMs / 1000)}s
+                      {Math.round((Number(visitor.totalTimeOnPageMs) || 0) / 1000)}s
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
-                      {visitor.maxScrollPercentage.toFixed(0)}%
+                      {(Number(visitor.maxScrollPercentage) || 0).toFixed(0)}%
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm">
                       <span

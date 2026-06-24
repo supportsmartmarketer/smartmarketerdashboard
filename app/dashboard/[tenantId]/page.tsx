@@ -313,7 +313,11 @@ export default function DashboardPage() {
           processingUploadId={data.processingUploadId ?? null}
           onRefreshDashboard={() => fetchDashboard(false)}
         />
-        <AISummary tenantId={tenantId} window={window} />
+        <AISummary
+          tenantId={tenantId}
+          window={window}
+          uploadProcessing={Boolean(data.processingUploadId)}
+        />
       </div>
 
       {/* Visitor List */}

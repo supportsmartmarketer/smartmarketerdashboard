@@ -92,6 +92,48 @@ export function normalizeRevenueInsights(data: unknown): string[] {
   return data.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
 }
 
+export function normalizeRecommendedActions(data: unknown): string[] {
+  if (!Array.isArray(data)) return []
+  return data
+    .map((item) => {
+      if (typeof item === 'string') return item.trim()
+      if (item && typeof item === 'object') {
+        const o = item as Record<string, unknown>
+        if (typeof o.action === 'string') return o.action.trim()
+        if (typeof o.recommendation === 'string') return o.recommendation.trim()
+        if (typeof o.text === 'string') return o.text.trim()
+      }
+      return ''
+    })
+    .filter((s) => s.length > 0)
+}
+
+export function normalizeNotableSegments(
+  data: unknown
+): Array<{ segment: string; description: string }> {
+  if (!Array.isArray(data)) return []
+  return data
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const o = item as Record<string, unknown>
+      const segment =
+        typeof o.segment === 'string'
+          ? o.segment.trim()
+          : typeof o.name === 'string'
+            ? o.name.trim()
+            : ''
+      const description =
+        typeof o.description === 'string'
+          ? o.description.trim()
+          : typeof o.summary === 'string'
+            ? o.summary.trim()
+            : ''
+      if (!segment && !description) return null
+      return { segment: segment || 'Segment', description }
+    })
+    .filter((s): s is { segment: string; description: string } => s !== null)
+}
+
 /**
  * Generate AI summary for tenant and time window
  */
@@ -217,8 +259,8 @@ Do not include any PII (emails, phone numbers, names) in the output. You MAY ref
     return {
       executiveSummary: parsed.executiveSummary || '',
       keyObservations: normalizeKeyObservations(parsed.keyObservations),
-      recommendedActions: Array.isArray(parsed.recommendedActions) ? parsed.recommendedActions : [],
-      notableSegments: Array.isArray(parsed.notableSegments) ? parsed.notableSegments : [],
+      recommendedActions: normalizeRecommendedActions(parsed.recommendedActions),
+      notableSegments: normalizeNotableSegments(parsed.notableSegments),
       priorityAction: normalizePriorityAction(parsed.priorityAction),
       revenueInsights: normalizeRevenueInsights(parsed.revenueInsights),
     }
@@ -245,10 +287,8 @@ function toApiShape(
     id: row.id,
     executiveSummary: row.executiveSummary,
     keyObservations: normalizeKeyObservations(row.keyObservations),
-    recommendedActions: Array.isArray(row.recommendedActions)
-      ? (row.recommendedActions as string[])
-      : [],
-    notableSegments: Array.isArray(row.notableSegments) ? row.notableSegments : [],
+    recommendedActions: normalizeRecommendedActions(row.recommendedActions),
+    notableSegments: normalizeNotableSegments(row.notableSegments),
     priorityAction: normalizePriorityAction(row.priorityAction),
     revenueInsights: normalizeRevenueInsights(row.revenueInsights),
     createdAt: row.createdAt,
