@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { isMissingDbColumn, normalizeTrackingConfig } from '@/lib/tenant-tracking-config'
 
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let requestedTrackingConfig = false
   try {
     const { id } = await params
     if (!id) {
@@ -15,14 +17,24 @@ export async function PATCH(
       name?: string
       domain?: string | null
       showFinancialInsights?: boolean
+      trackingConfig?: {
+        keyPagePatterns?: string[]
+        ctaUrlPatterns?: string[]
+        ctaPhrasePatterns?: string[]
+      }
     }
 
     const data: {
       name?: string
       domain?: string | null
       showFinancialInsights?: boolean
+      trackingConfig?: {
+        keyPagePatterns: string[]
+        ctaUrlPatterns: string[]
+        ctaPhrasePatterns: string[]
+      }
     } = {}
-
+    
     if (typeof body.name === 'string' && body.name.trim() !== '') {
       data.name = body.name.trim()
     }
@@ -31,6 +43,10 @@ export async function PATCH(
     }
     if (typeof body.showFinancialInsights === 'boolean') {
       data.showFinancialInsights = body.showFinancialInsights
+    }
+    if (body.trackingConfig && typeof body.trackingConfig === 'object') {
+      data.trackingConfig = normalizeTrackingConfig(body.trackingConfig)
+      requestedTrackingConfig = true
     }
 
     if (Object.keys(data).length === 0) {
@@ -46,6 +62,15 @@ export async function PATCH(
     const e = error as { code?: string }
     if (e.code === 'P2025') {
       return NextResponse.json({ error: 'Client not found' }, { status: 404 })
+    }
+    if (requestedTrackingConfig && isMissingDbColumn(error, 'tracking_config')) {
+      return NextResponse.json(
+        {
+          error:
+            'Database is missing tracking_config column. Run `npx prisma db push` on the server, then try again.',
+        },
+        { status: 503 }
+      )
     }
     console.error('Error updating tenant:', error)
     return NextResponse.json(

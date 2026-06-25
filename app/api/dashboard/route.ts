@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import {
+  effectiveCtaPhrasePatterns,
+  effectiveCtaUrlPatterns,
+  effectiveKeyPagePatterns,
+  isMissingDbColumn,
+  normalizeTrackingConfig,
+  usesCustomCtaRules,
+  usesCustomKeyPages,
+} from '@/lib/tenant-tracking-config'
+import {
   loadProfilesActiveInCalendarWindow,
   parseDashboardWindowParam,
 } from '@/lib/dashboard-window'
@@ -15,10 +24,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'tenantId is required' }, { status: 400 })
     }
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { showFinancialInsights: true },
-    })
+    let tenant: { showFinancialInsights: boolean; trackingConfig?: unknown } | null = null
+    try {
+      tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { showFinancialInsights: true, trackingConfig: true },
+      })
+    } catch (e: unknown) {
+      if (isMissingDbColumn(e, 'tracking_config')) {
+        tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { showFinancialInsights: true },
+        })
+      } else {
+        throw e
+      }
+    }
     if (!tenant) {
       return NextResponse.json({ error: 'Tenant not found' }, { status: 404 })
     }
@@ -151,10 +172,20 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const trackingConfigRaw = normalizeTrackingConfig(tenant.trackingConfig ?? null)
+    const trackingRules = {
+      keyPagePatterns: effectiveKeyPagePatterns(trackingConfigRaw),
+      ctaUrlPatterns: effectiveCtaUrlPatterns(trackingConfigRaw),
+      ctaPhrasePatterns: effectiveCtaPhrasePatterns(trackingConfigRaw),
+      usesCustomKeyPages: usesCustomKeyPages(trackingConfigRaw),
+      usesCustomCtaRules: usesCustomCtaRules(trackingConfigRaw),
+    }
+
     return NextResponse.json({
       windowStart,
       windowEnd,
       showFinancialInsights: tenant.showFinancialInsights,
+      trackingRules,
       latestUploadId: latestUpload?.id ?? null,
       processingUploadId,
       metrics: {

@@ -7,13 +7,17 @@ import {
   calculateEngagementScoreSparseBehavior,
   eventsHaveSparseBehavioralSignals,
   getEngagementSegment,
-  isKeyPage,
-  isCTAClick,
   isExitIntent,
-  isFormSubmit,
   isVideoEngaged,
   VisitorFlags,
 } from './scoring'
+import {
+  isMissingDbColumn,
+  matchesCtaEvent,
+  matchesKeyPage,
+  normalizeTrackingConfig,
+  type TenantTrackingConfig,
+} from './tenant-tracking-config'
 import { detectPixelFormatFromCsvRow, type PixelFormat } from './pixel-format'
 
 /** Progress polling; ignore if `processed_rows` column is missing on old DBs. */
@@ -265,7 +269,35 @@ function parseV4EventsColumn(row: CSVRow, base: ProcessedEvent): ProcessedEvent[
 
     const formId = props?.formId ?? props?.form_id
     const elementIdentifier =
-      typeof formId === 'string' && formId.trim() ? formId.trim() : undefined
+      typeof formId === 'string' && formId.trim()
+        ? formId.trim()
+        : typeof props?.elementId === 'string'
+          ? props.elementId.trim()
+          : typeof props?.element_id === 'string'
+            ? props.element_id.trim()
+            : undefined
+
+    const textRaw =
+      props?.elementText ??
+      props?.element_text ??
+      props?.linkText ??
+      props?.link_text ??
+      props?.text ??
+      props?.label
+    const elementText = typeof textRaw === 'string' && textRaw.trim() ? textRaw.trim() : undefined
+
+    let timeOnPageMs: number | undefined
+    const timeRaw =
+      props?.timeOnPage ??
+      props?.time_on_page ??
+      props?.dwellTime ??
+      props?.dwell_time ??
+      props?.durationMs ??
+      props?.duration_ms
+    if (timeRaw != null) {
+      const n = typeof timeRaw === 'number' ? timeRaw : parseInt(String(timeRaw), 10)
+      if (!Number.isNaN(n) && n >= 0) timeOnPageMs = Math.max(0, Math.min(600000, n))
+    }
 
     out.push({
       visitorKey: base.visitorKey,
@@ -277,6 +309,8 @@ function parseV4EventsColumn(row: CSVRow, base: ProcessedEvent): ProcessedEvent[
       referrerUrl,
       scrollPct,
       elementIdentifier,
+      elementText,
+      timeOnPageMs,
       rawJson: row,
     })
   }
@@ -467,6 +501,103 @@ function groupIntoSessions(events: ProcessedEvent[]): ProcessedEvent[][] {
   }
 
   return sessions
+}
+
+/** Infer session length from first→last event when dwell time is missing (typical V4). */
+function inferSessionDurationMs(session: ProcessedEvent[]): number {
+  if (session.length === 0) return 0
+  if (session.length === 1) return session[0].timeOnPageMs || 0
+  const start = session[0].eventTs.getTime()
+  const end = session[session.length - 1].eventTs.getTime()
+  return Math.min(30 * 60 * 1000, Math.max(0, end - start))
+}
+
+/**
+ * Total dwell: max explicit timeOnPage per session (V3 idle/exit), else infer from event timestamps.
+ */
+function computeTotalTimeOnPageMs(events: ProcessedEvent[], sessions: ProcessedEvent[][]): number {
+  let total = 0
+  for (const session of sessions) {
+    const explicit = session.map((e) => e.timeOnPageMs || 0).filter((t) => t > 0)
+    if (explicit.length > 0) {
+      total += Math.max(...explicit)
+    } else {
+      total += inferSessionDurationMs(session)
+    }
+  }
+  if (total === 0 && events.length >= 2) {
+    return inferSessionDurationMs([...events].sort((a, b) => a.eventTs.getTime() - b.eventTs.getTime()))
+  }
+  return total
+}
+
+const RAW_EVENT_SELECT = {
+  visitorKey: true,
+  uuid: true,
+  ip: true,
+  eventTs: true,
+  eventType: true,
+  url: true,
+  referrerUrl: true,
+  timeOnPageMs: true,
+  idleTimeMs: true,
+  scrollPct: true,
+  threshold: true,
+  elementIdentifier: true,
+  elementText: true,
+  title: true,
+  coordinates: true,
+} as const
+
+function mapRawEventToProcessed(r: {
+  visitorKey: string
+  uuid: string | null
+  ip: string | null
+  eventTs: Date
+  eventType: string | null
+  url: string | null
+  referrerUrl: string | null
+  timeOnPageMs: number | null
+  idleTimeMs: number | null
+  scrollPct: number | null
+  threshold: string | null
+  elementIdentifier: string | null
+  elementText: string | null
+  title: string | null
+  coordinates: unknown
+}): ProcessedEvent {
+  return {
+    visitorKey: r.visitorKey,
+    uuid: r.uuid ?? undefined,
+    ip: r.ip ?? undefined,
+    eventTs: r.eventTs,
+    eventType: r.eventType ?? undefined,
+    url: r.url ?? undefined,
+    referrerUrl: r.referrerUrl ?? undefined,
+    timeOnPageMs: r.timeOnPageMs ?? undefined,
+    idleTimeMs: r.idleTimeMs ?? undefined,
+    scrollPct: r.scrollPct ?? undefined,
+    threshold: r.threshold ?? undefined,
+    elementIdentifier: r.elementIdentifier ?? undefined,
+    elementText: r.elementText ?? undefined,
+    title: r.title ?? undefined,
+    coordinates: r.coordinates as { lat: number; lng: number } | null | undefined,
+  }
+}
+
+async function loadTenantTrackingConfig(tenantId: string): Promise<TenantTrackingConfig> {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { trackingConfig: true },
+    })
+    return normalizeTrackingConfig(tenant?.trackingConfig)
+  } catch (e: unknown) {
+    if (isMissingDbColumn(e, 'tracking_config')) {
+      return normalizeTrackingConfig(null)
+    }
+    throw e
+  }
 }
 
 function mapEventToDbRow(event: ProcessedEvent, tenantId: string, uploadId: string) {
@@ -661,6 +792,8 @@ export async function processCSVUploadFromStream(
           const windowEnd = new Date(maxTs)
           const windowStart = new Date(Math.max(minTs, maxTs - 30 * 24 * 60 * 60 * 1000))
 
+          const trackingConfig = await loadTenantTrackingConfig(tenantId)
+
           const profileTotal = realVisitorKeys.length
           if (profileTotal > 0) {
             await safeUploadSetVisitorProfileProgress(uploadId, 0, profileTotal)
@@ -671,31 +804,18 @@ export async function processCSVUploadFromStream(
             const rawEvents = await prisma.rawEvent.findMany({
               where: { tenantId, uploadId, visitorKey },
               orderBy: { eventTs: 'asc' },
-              select: {
-                visitorKey: true, uuid: true, ip: true, eventTs: true, eventType: true,
-                url: true, referrerUrl: true, timeOnPageMs: true, idleTimeMs: true,
-                scrollPct: true, threshold: true, elementIdentifier: true,
-                elementText: true, title: true, coordinates: true,
-              },
+              select: RAW_EVENT_SELECT,
             })
-            const events: ProcessedEvent[] = rawEvents.map((r) => ({
-              visitorKey: r.visitorKey,
-              uuid: r.uuid ?? undefined,
-              ip: r.ip ?? undefined,
-              eventTs: r.eventTs,
-              eventType: r.eventType ?? undefined,
-              url: r.url ?? undefined,
-              referrerUrl: r.referrerUrl ?? undefined,
-              timeOnPageMs: r.timeOnPageMs ?? undefined,
-              idleTimeMs: r.idleTimeMs ?? undefined,
-              scrollPct: r.scrollPct ?? undefined,
-              threshold: r.threshold ?? undefined,
-              elementIdentifier: r.elementIdentifier ?? undefined,
-              elementText: r.elementText ?? undefined,
-              title: r.title ?? undefined,
-              coordinates: r.coordinates as { lat: number; lng: number } | null | undefined,
-            }))
-            await processVisitorProfile(tenantId, visitorKey, events, windowStart, windowEnd, identityByVisitor.get(visitorKey))
+            const events = rawEvents.map(mapRawEventToProcessed)
+            await processVisitorProfile(
+              tenantId,
+              visitorKey,
+              events,
+              windowStart,
+              windowEnd,
+              identityByVisitor.get(visitorKey),
+              trackingConfig
+            )
             await safeUploadSetVisitorProfileProgress(uploadId, i + 1, profileTotal)
           }
 
@@ -809,6 +929,8 @@ export async function processCSVUpload(
     const windowEnd = new Date(maxTs)
     const windowStart = new Date(Math.max(minTs, maxTs - 30 * 24 * 60 * 60 * 1000))
 
+    const trackingConfig = await loadTenantTrackingConfig(tenantId)
+
     // Build visitor profiles one at a time; skip 'unknown' (would load ALL unidentified events at once)
     const profileTotal = realVisitorKeys.length
     if (profileTotal > 0) {
@@ -819,31 +941,18 @@ export async function processCSVUpload(
       const rawEvents = await prisma.rawEvent.findMany({
         where: { tenantId, uploadId, visitorKey },
         orderBy: { eventTs: 'asc' },
-        select: {
-          visitorKey: true, uuid: true, ip: true, eventTs: true, eventType: true,
-          url: true, referrerUrl: true, timeOnPageMs: true, idleTimeMs: true,
-          scrollPct: true, threshold: true, elementIdentifier: true,
-          elementText: true, title: true, coordinates: true,
-        },
+        select: RAW_EVENT_SELECT,
       })
-      const events: ProcessedEvent[] = rawEvents.map((r) => ({
-        visitorKey: r.visitorKey,
-        uuid: r.uuid ?? undefined,
-        ip: r.ip ?? undefined,
-        eventTs: r.eventTs,
-        eventType: r.eventType ?? undefined,
-        url: r.url ?? undefined,
-        referrerUrl: r.referrerUrl ?? undefined,
-        timeOnPageMs: r.timeOnPageMs ?? undefined,
-        idleTimeMs: r.idleTimeMs ?? undefined,
-        scrollPct: r.scrollPct ?? undefined,
-        threshold: r.threshold ?? undefined,
-        elementIdentifier: r.elementIdentifier ?? undefined,
-        elementText: r.elementText ?? undefined,
-        title: r.title ?? undefined,
-        coordinates: r.coordinates as { lat: number; lng: number } | null | undefined,
-      }))
-      await processVisitorProfile(tenantId, visitorKey, events, windowStart, windowEnd, identityByVisitor.get(visitorKey))
+      const events = rawEvents.map(mapRawEventToProcessed)
+      await processVisitorProfile(
+        tenantId,
+        visitorKey,
+        events,
+        windowStart,
+        windowEnd,
+        identityByVisitor.get(visitorKey),
+        trackingConfig
+      )
       await safeUploadSetVisitorProfileProgress(uploadId, i + 1, profileTotal)
     }
 
@@ -881,9 +990,27 @@ async function processVisitorProfile(
   events: ProcessedEvent[],
   windowStart: Date,
   windowEnd: Date,
-  preExtractedIdentity?: IdentityData
+  preExtractedIdentity?: IdentityData,
+  trackingConfig?: TenantTrackingConfig
 ): Promise<void> {
   if (events.length === 0) return
+
+  const config = trackingConfig ?? normalizeTrackingConfig(null)
+
+  let existingProfile: { identity: unknown } | null = null
+  if (!preExtractedIdentity) {
+    existingProfile = await prisma.visitorProfile.findUnique({
+      where: {
+        tenantId_windowStart_windowEnd_visitorKey: {
+          tenantId,
+          windowStart,
+          windowEnd,
+          visitorKey,
+        },
+      },
+      select: { identity: true },
+    })
+  }
 
   // Group into sessions
   const sessions = groupIntoSessions(events)
@@ -900,9 +1027,7 @@ async function processVisitorProfile(
 
   const uniquePages = new Set(events.map((e) => e.url).filter(Boolean)).size
 
-  const totalTimeOnPageMs = events
-    .map((e) => e.timeOnPageMs || 0)
-    .reduce((sum, t) => sum + t, 0)
+  const totalTimeOnPageMs = computeTotalTimeOnPageMs(events, sessions)
 
   const avgTimeOnPageMs = pageViews > 0 ? totalTimeOnPageMs / pageViews : 0
 
@@ -911,11 +1036,9 @@ async function processVisitorProfile(
     0
   )
 
-  // Calculate flags
-  const visitedKeyPage = events.some((e) => isKeyPage(e.url))
-  const ctaClicked = events.some(
-    (e) => isCTAClick(e.elementIdentifier, e.url) || isFormSubmit(e.eventType)
-  )
+  // Calculate flags (per-client key page & CTA rules)
+  const visitedKeyPage = events.some((e) => matchesKeyPage(e.url, config))
+  const ctaClicked = events.some((e) => matchesCtaEvent(e, config))
   const exitIntentTriggered = events.some((e) => isExitIntent(e.eventType))
   const videoEngaged = events.some((e) => isVideoEngaged(e.eventType))
 
@@ -977,6 +1100,13 @@ async function processVisitorProfile(
     if (id.state)          identity.state          = id.state
     if (id.zip)            identity.zip            = id.zip
   }
+
+  const identityPayload =
+    Object.keys(identity).length > 0
+      ? identity
+      : existingProfile?.identity && typeof existingProfile.identity === 'object'
+        ? existingProfile.identity
+        : null
 
   // Get geo: prefer address geocoding when sheet has address (accurate map), else IP-based
   let geo: { lat?: number; lng?: number; city?: string; region?: string; country?: string } = {}
@@ -1056,7 +1186,7 @@ async function processVisitorProfile(
       city: geo.city || null,
       region: geo.region || null,
       country: geo.country || null,
-      identity: Object.keys(identity).length > 0 ? identity : null,
+      identity: identityPayload,
       updatedAt: new Date(),
     },
     create: {
@@ -1081,8 +1211,64 @@ async function processVisitorProfile(
       city: geo.city || null,
       region: geo.region || null,
       country: geo.country || null,
-      identity: Object.keys(identity).length > 0 ? identity : null,
+      identity: identityPayload,
     },
   })
+}
+
+/**
+ * Recompute visitor profiles after tracking rules change (uses stored raw events).
+ */
+export async function rebuildTenantVisitorProfiles(
+  tenantId: string
+): Promise<{ rebuilt: number; uploads: number }> {
+  const trackingConfig = await loadTenantTrackingConfig(tenantId)
+  const uploads = await prisma.upload.findMany({
+    where: { tenantId, status: 'completed' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  })
+
+  let rebuilt = 0
+  for (const upload of uploads) {
+    const bounds = await prisma.rawEvent.aggregate({
+      where: { tenantId, uploadId: upload.id },
+      _min: { eventTs: true },
+      _max: { eventTs: true },
+    })
+    if (!bounds._min.eventTs || !bounds._max.eventTs) continue
+
+    const minTs = bounds._min.eventTs.getTime()
+    const maxTs = bounds._max.eventTs.getTime()
+    const windowEnd = new Date(maxTs)
+    const windowStart = new Date(Math.max(minTs, maxTs - 30 * 24 * 60 * 60 * 1000))
+
+    const keyRows = await prisma.rawEvent.findMany({
+      where: { tenantId, uploadId: upload.id, visitorKey: { not: 'unknown' } },
+      distinct: ['visitorKey'],
+      select: { visitorKey: true },
+    })
+
+    for (const { visitorKey } of keyRows) {
+      const rawEvents = await prisma.rawEvent.findMany({
+        where: { tenantId, uploadId: upload.id, visitorKey },
+        orderBy: { eventTs: 'asc' },
+        select: RAW_EVENT_SELECT,
+      })
+      if (rawEvents.length === 0) continue
+      await processVisitorProfile(
+        tenantId,
+        visitorKey,
+        rawEvents.map(mapRawEventToProcessed),
+        windowStart,
+        windowEnd,
+        undefined,
+        trackingConfig
+      )
+      rebuilt++
+    }
+  }
+
+  return { rebuilt, uploads: uploads.length }
 }
 

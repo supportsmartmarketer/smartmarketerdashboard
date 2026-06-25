@@ -17,6 +17,13 @@ interface DashboardData {
   showFinancialInsights: boolean
   latestUploadId: string | null
   processingUploadId: string | null
+  trackingRules?: {
+    keyPagePatterns: string[]
+    ctaUrlPatterns: string[]
+    ctaPhrasePatterns: string[]
+    usesCustomKeyPages?: boolean
+    usesCustomCtaRules?: boolean
+  }
   metrics: {
     totalVisitors: number
     engagedVisitors: number
@@ -331,7 +338,11 @@ export default function DashboardPage() {
             View All Visitors →
           </Link>
         </div>
-        <VisitorList visitors={data.profiles} onVisitorClick={handleVisitorClick} />
+        <VisitorList
+          visitors={data.profiles}
+          onVisitorClick={handleVisitorClick}
+          trackingRules={data.trackingRules}
+        />
       </div>
     </div>
   )

@@ -250,6 +250,12 @@ export default function TenantsPage() {
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <Link
+                        href={`/admin/tenants/${tenant.id}/tracking`}
+                        className="text-[#1D6E95] hover:text-[#155a7a] text-sm font-medium"
+                      >
+                        Tracking rules
+                      </Link>
+                      <Link
                         href={`/dashboard/${tenant.id}`}
                         className="link-primary-blue"
                       >

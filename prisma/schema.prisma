@@ -16,6 +16,8 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
   /** When false, dashboard & upload hide revenue / ROI / forecast sections for this client */
   showFinancialInsights Boolean @default(true) @map("show_financial_insights")
+  /** Per-client key page & CTA rules: { keyPagePatterns, ctaUrlPatterns, ctaPhrasePatterns } */
+  trackingConfig        Json?    @map("tracking_config")
 
   uploads          Upload[]
   rawEvents        RawEvent[]

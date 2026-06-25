@@ -21,9 +21,16 @@ interface Visitor {
 interface VisitorListProps {
   visitors: Visitor[]
   onVisitorClick: (visitor: Visitor) => void
+  trackingRules?: {
+    keyPagePatterns: string[]
+    ctaUrlPatterns: string[]
+    ctaPhrasePatterns: string[]
+    usesCustomKeyPages?: boolean
+    usesCustomCtaRules?: boolean
+  }
 }
 
-export default function VisitorList({ visitors, onVisitorClick }: VisitorListProps) {
+export default function VisitorList({ visitors, onVisitorClick, trackingRules }: VisitorListProps) {
   const [filters, setFilters] = useState({
     repeat: false,
     timeOver60s: false,
@@ -88,6 +95,26 @@ export default function VisitorList({ visitors, onVisitorClick }: VisitorListPro
 
       {/* Filters */}
       <div className="border-b border-gray-100 bg-gray-50 px-6 py-4">
+        {trackingRules && (
+          <p className="mb-3 text-xs leading-relaxed text-gray-600">
+            <span className="font-medium text-gray-800">Active rules — </span>
+            Key pages:{' '}
+            {trackingRules.keyPagePatterns.slice(0, 8).join(', ')}
+            {trackingRules.keyPagePatterns.length > 8 ? '…' : ''}
+            {!trackingRules.usesCustomKeyPages && (
+              <span className="text-gray-500"> (defaults)</span>
+            )}
+            {' · '}
+            CTA URLs:{' '}
+            {trackingRules.ctaUrlPatterns.slice(0, 5).join(', ') || '—'}
+            {' · '}
+            CTA phrases:{' '}
+            {trackingRules.ctaPhrasePatterns.slice(0, 5).join(', ') || '—'}
+            {!trackingRules.usesCustomCtaRules && (
+              <span className="text-gray-500"> (defaults)</span>
+            )}
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <label className="flex items-center">
             <input
