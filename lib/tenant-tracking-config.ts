@@ -152,7 +152,7 @@ export function matchesCtaEvent(event: CtaEventShape, config: TenantTrackingConf
   }
 
   const phrasePatterns = effectiveCtaPhrasePatterns(config)
-  const textFields = [event.elementText, event.elementIdentifier, event.title, event.url]
+  const textFields = [event.elementText, event.elementIdentifier, event.title]
   for (const p of phrasePatterns) {
     if (textFields.some((t) => textMatchesPattern(t, p))) return true
   }

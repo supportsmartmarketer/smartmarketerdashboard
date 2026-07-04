@@ -10,6 +10,10 @@ import {
   usesCustomKeyPages,
 } from '@/lib/tenant-tracking-config'
 import {
+  computeVisitorWindowSignals,
+  groupEventsByVisitorKey,
+} from '@/lib/visitor-signals'
+import {
   loadProfilesActiveInCalendarWindow,
   parseDashboardWindowParam,
 } from '@/lib/dashboard-window'
@@ -181,10 +185,40 @@ export async function GET(request: NextRequest) {
       usesCustomCtaRules: usesCustomCtaRules(trackingConfigRaw),
     }
 
+    // Live filter signals from events in this calendar window (V4-accurate; not stale upload flags)
+    const windowEventsByVisitor = new Map<string, ReturnType<typeof computeVisitorWindowSignals>>()
+    if (visitorKeys.length > 0) {
+      const windowEvents = await prisma.rawEvent.findMany({
+        where: {
+          tenantId,
+          visitorKey: { in: visitorKeys },
+          eventTs: { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          visitorKey: true,
+          eventTs: true,
+          eventType: true,
+          url: true,
+          timeOnPageMs: true,
+          scrollPct: true,
+          elementIdentifier: true,
+          elementText: true,
+          title: true,
+        },
+        orderBy: { eventTs: 'asc' },
+      })
+
+      const grouped = groupEventsByVisitorKey(windowEvents)
+      for (const [key, evs] of grouped) {
+        windowEventsByVisitor.set(key, computeVisitorWindowSignals(evs, trackingConfigRaw))
+      }
+    }
+
     return NextResponse.json({
       windowStart,
       windowEnd,
       showFinancialInsights: tenant.showFinancialInsights,
+      trackingConfig: trackingConfigRaw,
       trackingRules,
       latestUploadId: latestUpload?.id ?? null,
       processingUploadId,
@@ -200,29 +234,32 @@ export async function GET(request: NextRequest) {
         topEvents,
         highIntentVisitorsList,
       },
-      profiles: profiles.map((p: any) => ({
-        id: p.id,
-        visitorKey: p.visitorKey,
-        firstSeenAt: p.firstSeenAt,
-        lastSeenAt: p.lastSeenAt,
-        visitsCount: p.visitsCount,
-        totalEvents: p.totalEvents,
-        pageViews: p.pageViews,
-        uniquePagesCount: p.uniquePagesCount,
-        totalTimeOnPageMs: p.totalTimeOnPageMs,
-        avgTimeOnPageMs: p.avgTimeOnPageMs,
-        maxScrollPercentage: p.maxScrollPercentage,
-        flags: p.flags,
-        engagementScore: p.engagementScore,
-        engagementSegment: p.engagementSegment,
-        lat: p.lat,
-        lng: p.lng,
-        city: p.city,
-        region: p.region,
-        country: p.country,
-        identity: p.identity,
-        ip: ipMap.get(p.visitorKey) || null,
-      })),
+      profiles: profiles.map((p: any) => {
+        const live = windowEventsByVisitor.get(p.visitorKey)
+        return {
+          id: p.id,
+          visitorKey: p.visitorKey,
+          firstSeenAt: p.firstSeenAt,
+          lastSeenAt: p.lastSeenAt,
+          visitsCount: live?.visitsCount ?? p.visitsCount,
+          totalEvents: p.totalEvents,
+          pageViews: p.pageViews,
+          uniquePagesCount: p.uniquePagesCount,
+          totalTimeOnPageMs: live?.totalTimeOnPageMs ?? p.totalTimeOnPageMs,
+          avgTimeOnPageMs: p.avgTimeOnPageMs,
+          maxScrollPercentage: live?.maxScrollPercentage ?? p.maxScrollPercentage,
+          flags: live?.flags ?? p.flags,
+          engagementScore: p.engagementScore,
+          engagementSegment: p.engagementSegment,
+          lat: p.lat,
+          lng: p.lng,
+          city: p.city,
+          region: p.region,
+          country: p.country,
+          identity: p.identity,
+          ip: ipMap.get(p.visitorKey) || null,
+        }
+      }),
     })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })

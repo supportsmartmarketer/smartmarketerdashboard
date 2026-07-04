@@ -21,6 +21,7 @@ interface Visitor {
 interface VisitorListProps {
   visitors: Visitor[]
   onVisitorClick: (visitor: Visitor) => void
+  onConfigureRules?: () => void
   trackingRules?: {
     keyPagePatterns: string[]
     ctaUrlPatterns: string[]
@@ -30,7 +31,12 @@ interface VisitorListProps {
   }
 }
 
-export default function VisitorList({ visitors, onVisitorClick, trackingRules }: VisitorListProps) {
+export default function VisitorList({
+  visitors,
+  onVisitorClick,
+  onConfigureRules,
+  trackingRules,
+}: VisitorListProps) {
   const [filters, setFilters] = useState({
     repeat: false,
     timeOver60s: false,
@@ -79,13 +85,19 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
 
   const filteredVisitors = visitors.filter((v) => {
     if (filters.repeat && !v.flags?.is_repeat_visitor) return false
-    if (filters.timeOver60s && v.totalTimeOnPageMs < 60000) return false
+    if (filters.timeOver60s && (Number(v.totalTimeOnPageMs) || 0) < 60000) return false
     if (filters.visitedKeyPage && !v.flags?.visited_key_page) return false
     if (filters.exitIntent && !v.flags?.exit_intent_triggered) return false
     if (filters.ctaClicked && !v.flags?.cta_clicked) return false
     if (filters.segment && v.engagementSegment !== filters.segment) return false
     return true
   })
+
+  const countRepeat = visitors.filter((v) => v.flags?.is_repeat_visitor).length
+  const countTime60 = visitors.filter((v) => (Number(v.totalTimeOnPageMs) || 0) >= 60000).length
+  const countKeyPage = visitors.filter((v) => v.flags?.visited_key_page).length
+  const countExit = visitors.filter((v) => v.flags?.exit_intent_triggered).length
+  const countCta = visitors.filter((v) => v.flags?.cta_clicked).length
 
   return (
     <div className="overflow-hidden rounded-xl bg-white shadow-sm border border-gray-200">
@@ -96,24 +108,29 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
       {/* Filters */}
       <div className="border-b border-gray-100 bg-gray-50 px-6 py-4">
         {trackingRules && (
-          <p className="mb-3 text-xs leading-relaxed text-gray-600">
-            <span className="font-medium text-gray-800">Active rules — </span>
-            Key pages:{' '}
-            {trackingRules.keyPagePatterns.slice(0, 8).join(', ')}
-            {trackingRules.keyPagePatterns.length > 8 ? '…' : ''}
-            {!trackingRules.usesCustomKeyPages && (
-              <span className="text-gray-500"> (defaults)</span>
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <p className="text-xs leading-relaxed text-gray-600">
+              <span className="font-medium text-gray-800">Active rules — </span>
+              Key pages: {trackingRules.keyPagePatterns.slice(0, 6).join(', ')}
+              {trackingRules.keyPagePatterns.length > 6 ? '…' : ''}
+              {!trackingRules.usesCustomKeyPages && (
+                <span className="text-amber-700"> (defaults — configure below)</span>
+              )}
+              {' · '}
+              CTA URLs: {trackingRules.ctaUrlPatterns.slice(0, 4).join(', ') || '—'}
+              {' · '}
+              CTA phrases: {trackingRules.ctaPhrasePatterns.slice(0, 4).join(', ') || '—'}
+            </p>
+            {onConfigureRules && (
+              <button
+                type="button"
+                onClick={onConfigureRules}
+                className="flex-shrink-0 text-xs font-medium text-[#1D6E95] hover:underline"
+              >
+                Edit key pages &amp; CTAs
+              </button>
             )}
-            {' · '}
-            CTA URLs:{' '}
-            {trackingRules.ctaUrlPatterns.slice(0, 5).join(', ') || '—'}
-            {' · '}
-            CTA phrases:{' '}
-            {trackingRules.ctaPhrasePatterns.slice(0, 5).join(', ') || '—'}
-            {!trackingRules.usesCustomCtaRules && (
-              <span className="text-gray-500"> (defaults)</span>
-            )}
-          </p>
+          </div>
         )}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
           <label className="flex items-center">
@@ -123,7 +140,7 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
               onChange={(e) => setFilters({ ...filters, repeat: e.target.checked })}
               className="mr-2"
             />
-            <span className="text-sm">Repeat</span>
+            <span className="text-sm">Repeat ({countRepeat})</span>
           </label>
           <label className="flex items-center">
             <input
@@ -132,7 +149,7 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
               onChange={(e) => setFilters({ ...filters, timeOver60s: e.target.checked })}
               className="mr-2"
             />
-            <span className="text-sm">Time &gt; 60s</span>
+            <span className="text-sm">Time &gt; 60s ({countTime60})</span>
           </label>
           <label className="flex items-center">
             <input
@@ -141,7 +158,7 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
               onChange={(e) => setFilters({ ...filters, visitedKeyPage: e.target.checked })}
               className="mr-2"
             />
-            <span className="text-sm">Key Page</span>
+            <span className="text-sm">Key Page ({countKeyPage})</span>
           </label>
           <label className="flex items-center">
             <input
@@ -150,7 +167,7 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
               onChange={(e) => setFilters({ ...filters, exitIntent: e.target.checked })}
               className="mr-2"
             />
-            <span className="text-sm">Exit Intent</span>
+            <span className="text-sm">Exit Intent ({countExit})</span>
           </label>
           <label className="flex items-center">
             <input
@@ -159,7 +176,7 @@ export default function VisitorList({ visitors, onVisitorClick, trackingRules }:
               onChange={(e) => setFilters({ ...filters, ctaClicked: e.target.checked })}
               className="mr-2"
             />
-            <span className="text-sm">CTA Clicked</span>
+            <span className="text-sm">CTA Clicked ({countCta})</span>
           </label>
           <select
             value={filters.segment}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import KPICards from '@/components/KPICards'
@@ -8,6 +8,7 @@ import ROICalculator from '@/components/ROICalculator'
 import EngagementBreakdown from '@/components/EngagementBreakdown'
 import VisitorMap from '@/components/VisitorMap'
 import VisitorList from '@/components/VisitorList'
+import TrackingRulesPanel from '@/components/TrackingRulesPanel'
 import AISummary from '@/components/AISummary'
 import RevenueEstimator from '@/components/RevenueEstimator'
 
@@ -23,6 +24,11 @@ interface DashboardData {
     ctaPhrasePatterns: string[]
     usesCustomKeyPages?: boolean
     usesCustomCtaRules?: boolean
+  }
+  trackingConfig?: {
+    keyPagePatterns: string[]
+    ctaUrlPatterns: string[]
+    ctaPhrasePatterns: string[]
   }
   metrics: {
     totalVisitors: number
@@ -81,6 +87,8 @@ export default function DashboardPage() {
   const [revenueExpanded, setRevenueExpanded] = useState(true)
   const [autoSummaryState, setAutoSummaryState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [financialTogglePending, setFinancialTogglePending] = useState(false)
+  const rulesPanelRef = useRef<HTMLDivElement>(null)
+  const [rulesOpenRequest, setRulesOpenRequest] = useState(0)
 
   const patchFinancialInsights = async (next: boolean) => {
     setFinancialTogglePending(true)
@@ -338,10 +346,30 @@ export default function DashboardPage() {
             View All Visitors →
           </Link>
         </div>
+        <div ref={rulesPanelRef}>
+          <TrackingRulesPanel
+            tenantId={tenantId}
+            trackingConfig={
+              data.trackingConfig ?? {
+                keyPagePatterns: [],
+                ctaUrlPatterns: [],
+                ctaPhrasePatterns: [],
+              }
+            }
+            usesCustomKeyPages={data.trackingRules?.usesCustomKeyPages ?? false}
+            usesCustomCtaRules={data.trackingRules?.usesCustomCtaRules ?? false}
+            openRequest={rulesOpenRequest}
+            onSaved={() => void fetchDashboard(false)}
+          />
+        </div>
         <VisitorList
           visitors={data.profiles}
           onVisitorClick={handleVisitorClick}
           trackingRules={data.trackingRules}
+          onConfigureRules={() => {
+            setRulesOpenRequest((n) => n + 1)
+            rulesPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
         />
       </div>
     </div>

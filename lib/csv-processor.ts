@@ -282,8 +282,14 @@ function parseV4EventsColumn(row: CSVRow, base: ProcessedEvent): ProcessedEvent[
       props?.element_text ??
       props?.linkText ??
       props?.link_text ??
+      props?.innerText ??
+      props?.inner_text ??
+      props?.buttonText ??
+      props?.button_text ??
       props?.text ??
-      props?.label
+      props?.label ??
+      props?.ctaText ??
+      props?.cta_text
     const elementText = typeof textRaw === 'string' && textRaw.trim() ? textRaw.trim() : undefined
 
     let timeOnPageMs: number | undefined
