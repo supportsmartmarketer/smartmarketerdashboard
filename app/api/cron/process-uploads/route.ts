@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyCronRequest } from '@/lib/cron-auth'
 import { processPendingUploadJobs } from '@/lib/upload-job-processor'
 
-export const maxDuration = 800
+export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {

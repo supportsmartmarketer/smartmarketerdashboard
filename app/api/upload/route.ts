@@ -10,7 +10,7 @@ import { processCSVUploadFromStream } from '@/lib/csv-processor'
 import { createUploadRecordResilient } from '@/lib/upload-create-compat'
 
 /** Large CSV ingest + profiles can run several minutes on Vercel Pro. */
-export const maxDuration = 800
+export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
