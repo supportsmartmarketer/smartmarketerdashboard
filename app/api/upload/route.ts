@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { Readable } from 'stream'
 import Busboy from 'busboy'
 import fs from 'fs'
@@ -8,6 +8,10 @@ import { randomUUID } from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { processCSVUploadFromStream } from '@/lib/csv-processor'
 import { createUploadRecordResilient } from '@/lib/upload-create-compat'
+
+/** Large CSV ingest + profiles can run several minutes on Vercel Pro. */
+export const maxDuration = 300
+export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
@@ -81,27 +85,27 @@ export async function POST(request: NextRequest) {
       fileSizeBytes,
     })
 
-    const processFromTemp = () => {
+    const processFromTemp = async () => {
       const readStream = fs.createReadStream(tempPath)
-      processCSVUploadFromStream(tenantId, upload.id, readStream)
-        .then((result) => {
-          console.log(`Upload ${upload.id} processed:`, result)
-        })
-        .catch((error: any) => {
-          console.error(`Upload ${upload.id} failed:`, error)
-          prisma.upload
-            .update({
-              where: { id: upload.id },
-              data: { status: 'error', error: error?.message || 'Processing failed' },
-            })
-            .catch(() => {})
-        })
-        .finally(() => {
-          fs.unlink(tempPath, () => {})
-        })
+      try {
+        const result = await processCSVUploadFromStream(tenantId, upload.id, readStream)
+        console.log(`Upload ${upload.id} processed:`, result)
+      } catch (error: unknown) {
+        console.error(`Upload ${upload.id} failed:`, error)
+        const msg = error instanceof Error ? error.message : 'Processing failed'
+        await prisma.upload
+          .update({
+            where: { id: upload.id },
+            data: { status: 'error', error: msg },
+          })
+          .catch(() => {})
+      } finally {
+        fs.unlink(tempPath, () => {})
+      }
     }
 
-    processFromTemp()
+    // Keep processing alive after 202 on Vercel/serverless (Render ignores `after`).
+    after(() => processFromTemp())
 
     return NextResponse.json(
       { id: upload.id, status: 'processing', message: 'Upload accepted; processing in background.' },

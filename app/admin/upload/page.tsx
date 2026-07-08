@@ -38,6 +38,10 @@ export default function UploadPage() {
   const [completedUploadId, setCompletedUploadId] = useState<string | null>(null)
   const [showProcessChoice, setShowProcessChoice] = useState(false)
   const [pendingUploadId, setPendingUploadId] = useState<string | null>(null)
+  const [statusBanner, setStatusBanner] = useState<{
+    type: 'info' | 'error' | 'success'
+    text: string
+  } | null>(null)
   /** Ensures profile-phase choice modal only once per upload, after ingest finishes and profile build starts */
   const profileChoiceOfferedForUploadRef = useRef<string | null>(null)
 
@@ -125,12 +129,18 @@ export default function UploadPage() {
         setProgress(`Processing complete! Processed ${status.rowCount || 0} rows.`)
         setProcessing(false)
         setCompletedUploadId(status.id)
+        setStatusBanner({
+          type: 'success',
+          text: `Processing complete — ${(status.rowCount || 0).toLocaleString()} rows.`,
+        })
         return
       }
 
       if (status.status === 'error') {
         setProgressPct(null)
-        setProgress(`Error: ${status.error || 'Unknown error'}`)
+        const msg = status.error || 'Unknown error'
+        setProgress(`Error: ${msg}`)
+        setStatusBanner({ type: 'error', text: msg })
         setProcessing(false)
         return
       }
@@ -196,12 +206,17 @@ export default function UploadPage() {
 
     setUploading(true)
     setUploadStatus(null)
-    setProgress('')
+    setProgress('Sending file to server…')
     setProgressPct(null)
     setCompletedUploadId(null)
     setShowProcessChoice(false)
     setPendingUploadId(null)
     profileChoiceOfferedForUploadRef.current = null
+    const sizeMb = (file.size / 1024 / 1024).toFixed(2)
+    setStatusBanner({
+      type: 'info',
+      text: `Uploading "${file.name}" (${sizeMb} MB). Large files can take several minutes on Vercel — keep this tab open until you see progress or completion.`,
+    })
 
     try {
       const formData = new FormData()
@@ -220,6 +235,10 @@ export default function UploadPage() {
         const fileInput = document.getElementById('file') as HTMLInputElement
         if (fileInput) fileInput.value = ''
         if (data.status === 'processing' || res.status === 202) {
+          setStatusBanner({
+            type: 'info',
+            text: `Upload accepted (ID: ${data.id.slice(0, 8)}…). Processing rows on the server — progress will update below.`,
+          })
           void pollUploadStatus(data.id, selectedTenantId)
           return
         }
@@ -228,19 +247,36 @@ export default function UploadPage() {
           setProgressPct(100)
           setProcessing(false)
           setCompletedUploadId(data.id)
+          setStatusBanner({
+            type: 'success',
+            text: `Upload complete — ${data.rowCount ?? 0} rows processed.`,
+          })
           return
         }
         if (data.status === 'error') {
-          setProgress(`Error: ${data.error || 'Unknown error'}`)
+          const msg = data.error || 'Unknown error'
+          setProgress(`Error: ${msg}`)
+          setStatusBanner({ type: 'error', text: msg })
           return
         }
       } else {
-        const error = await res.json()
-        setProgress(`Upload failed: ${error.error || 'Unknown error'}`)
+        const error = await res.json().catch(() => ({}))
+        const msg = (error as { error?: string }).error || `Server error (${res.status})`
+        setProgress(`Upload failed: ${msg}`)
+        setStatusBanner({
+          type: 'error',
+          text:
+            res.status === 413
+              ? 'File too large for the server limit. Try splitting the CSV or contact support.'
+              : msg,
+        })
       }
     } catch (error) {
       console.error('Error uploading file:', error)
-      setProgress('Upload failed. Please try again.')
+      const msg =
+        'Upload failed — the connection may have timed out (common for large files on Vercel). Check Admin → refresh, or try again with a smaller file.'
+      setProgress(msg)
+      setStatusBanner({ type: 'error', text: msg })
     } finally {
       setUploading(false)
     }
@@ -269,6 +305,21 @@ export default function UploadPage() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <h1 className="mb-6 text-2xl font-bold text-gray-900">Upload CSV</h1>
+
+      {statusBanner && (
+        <div
+          className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+            statusBanner.type === 'error'
+              ? 'border-red-200 bg-red-50 text-red-900'
+              : statusBanner.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-blue-200 bg-blue-50 text-blue-900'
+          }`}
+          role="status"
+        >
+          {statusBanner.text}
+        </div>
+      )}
 
       {showOverlay && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
