@@ -4,6 +4,10 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import RevenueEstimator from '@/components/RevenueEstimator'
+import {
+  shouldUseChunkedUpload,
+  uploadCsvInChunks,
+} from '@/lib/csv-chunk-upload-client'
 
 interface Tenant {
   id: string
@@ -23,6 +27,12 @@ interface UploadStatus {
   tenantId: string
   visitorProfileTotal?: number | null
   visitorProfileProcessed?: number | null
+  jobProgress?: {
+    mode: 'chunked'
+    phase: string | null
+    chunksReceived: number
+    totalChunks: number | null
+  } | null
 }
 
 export default function UploadPage() {
@@ -145,6 +155,21 @@ export default function UploadPage() {
         return
       }
 
+      if (status.status === 'pending') {
+        const jp = status.jobProgress
+        if (jp?.mode === 'chunked' && jp.totalChunks) {
+          const pct = Math.min(99, Math.round((jp.chunksReceived / jp.totalChunks) * 100))
+          setProgressPct(pct)
+          setProgress(
+            jp.chunksReceived >= jp.totalChunks
+              ? 'All parts received — server is ingesting rows…'
+              : `Receiving file parts… ${jp.chunksReceived} of ${jp.totalChunks}`
+          )
+        } else {
+          setProgress('Waiting for upload to start…')
+        }
+      }
+
       if (status.status === 'processing') {
         const vTotal = status.visitorProfileTotal
         const vProc = status.visitorProfileProcessed ?? 0
@@ -213,12 +238,36 @@ export default function UploadPage() {
     setPendingUploadId(null)
     profileChoiceOfferedForUploadRef.current = null
     const sizeMb = (file.size / 1024 / 1024).toFixed(2)
+    const useChunks = shouldUseChunkedUpload(file.size)
     setStatusBanner({
       type: 'info',
-      text: `Uploading "${file.name}" (${sizeMb} MB). Large files can take several minutes on Vercel — keep this tab open until you see progress or completion.`,
+      text: useChunks
+        ? `Uploading "${file.name}" (${sizeMb} MB) in parts for large-file support. Keep this tab open until processing completes.`
+        : `Uploading "${file.name}" (${sizeMb} MB). Large files can take several minutes on Vercel — keep this tab open until you see progress or completion.`,
     })
 
     try {
+      if (useChunks) {
+        const result = await uploadCsvInChunks(file, selectedTenantId, (p) => {
+          if (p.phase === 'chunks' && p.chunkIndex && p.totalChunks) {
+            setProgress(`Uploading part ${p.chunkIndex} of ${p.totalChunks}…`)
+            setProgressPct(Math.min(99, Math.round((p.chunkIndex / p.totalChunks) * 100)))
+          } else if (p.phase === 'init') {
+            setProgress('Preparing chunked upload…')
+          }
+        })
+
+        setFile(null)
+        const fileInput = document.getElementById('file') as HTMLInputElement
+        if (fileInput) fileInput.value = ''
+        setStatusBanner({
+          type: 'info',
+          text: `All ${result.totalChunks} parts uploaded (ID: ${result.uploadId.slice(0, 8)}…). Server is ingesting and building profiles — progress will update below.`,
+        })
+        void pollUploadStatus(result.uploadId, selectedTenantId)
+        return
+      }
+
       const formData = new FormData()
       formData.append('file', file)
       formData.append('tenantId', selectedTenantId)
@@ -262,12 +311,33 @@ export default function UploadPage() {
       } else {
         const error = await res.json().catch(() => ({}))
         const msg = (error as { error?: string }).error || `Server error (${res.status})`
+        if (res.status === 413 && file && selectedTenantId) {
+          setStatusBanner({
+            type: 'info',
+            text: 'Single-request limit hit — retrying as a multi-part upload…',
+          })
+          const result = await uploadCsvInChunks(file, selectedTenantId, (p) => {
+            if (p.phase === 'chunks' && p.chunkIndex && p.totalChunks) {
+              setProgress(`Uploading part ${p.chunkIndex} of ${p.totalChunks}…`)
+              setProgressPct(Math.min(99, Math.round((p.chunkIndex / p.totalChunks) * 100)))
+            }
+          })
+          setFile(null)
+          const fileInput = document.getElementById('file') as HTMLInputElement
+          if (fileInput) fileInput.value = ''
+          setStatusBanner({
+            type: 'info',
+            text: `All ${result.totalChunks} parts uploaded. Server is processing — progress will update below.`,
+          })
+          void pollUploadStatus(result.uploadId, selectedTenantId)
+          return
+        }
         setProgress(`Upload failed: ${msg}`)
         setStatusBanner({
           type: 'error',
           text:
             res.status === 413
-              ? 'File too large for the server limit. Try splitting the CSV or contact support.'
+              ? 'File too large for a single request — retrying with chunked upload should happen automatically for files over 3.5 MB.'
               : msg,
         })
       }
@@ -504,6 +574,10 @@ export default function UploadPage() {
               an <code className="text-xs">EVENTS</code> JSON column (page views, deep scroll, form submit, exit intent,
               etc.) when Audience Lab includes behavioral data. The uploader expands <code className="text-xs">EVENTS</code>{' '}
               into full timelines and detects V3 vs V4 automatically.
+            </li>
+            <li>
+              Files over <strong>3.5 MB</strong> upload in multiple parts automatically (supports very
+              large exports — 50k+ rows). Processing continues via background jobs on Vercel.
             </li>
             <li>
               Revenue estimates use <strong>all completed uploads</strong> for the selected client (V3 and V4

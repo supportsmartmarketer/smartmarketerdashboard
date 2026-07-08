@@ -1,7 +1,22 @@
 {
+  "crons": [
+    {
+      "path": "/api/cron/process-uploads",
+      "schedule": "* * * * *"
+    }
+  ],
   "functions": {
     "app/api/upload/route.ts": {
+      "maxDuration": 800
+    },
+    "app/api/upload/chunk/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/upload/init/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/cron/process-uploads/route.ts": {
+      "maxDuration": 800
     }
   }
 }

@@ -51,11 +51,40 @@ model Upload {
   /** Legacy/experimental column on some databases; kept so `db push` does not drop data */
   ingestAux         String?   @map("ingest_aux") @db.Text
 
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  rawEvents RawEvent[]
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rawEvents    RawEvent[]
+  chunks       UploadChunk[]
+  visitorIdentities UploadVisitorIdentity[]
 
   @@index([tenantId, createdAt])
   @@map("uploads")
+}
+
+/** Staged CSV parts for chunked uploads (Vercel 4.5MB limit bypass). */
+model UploadChunk {
+  id         String   @id @default(uuid())
+  uploadId   String   @map("upload_id")
+  chunkIndex Int      @map("chunk_index")
+  content    String   @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  upload Upload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@unique([uploadId, chunkIndex])
+  @@index([uploadId])
+  @@map("upload_chunks")
+}
+
+/** Identity captured during chunked ingest (one row per visitor per upload). */
+model UploadVisitorIdentity {
+  uploadId   String @map("upload_id")
+  visitorKey String @map("visitor_key")
+  identity   Json
+
+  upload Upload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@id([uploadId, visitorKey])
+  @@map("upload_visitor_identities")
 }
 
 model RawEvent {

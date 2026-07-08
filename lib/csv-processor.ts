@@ -420,7 +420,7 @@ export function parseRow(row: CSVRow): ProcessedEvent | null {
 }
 
 /** Compact identity extracted from a single CSV row (only stored once per visitor) */
-interface IdentityData {
+export interface IdentityData {
   firstName?: string
   lastName?: string
   companyName?: string
@@ -537,7 +537,7 @@ function computeTotalTimeOnPageMs(events: ProcessedEvent[], sessions: ProcessedE
   return total
 }
 
-const RAW_EVENT_SELECT = {
+export const RAW_EVENT_SELECT = {
   visitorKey: true,
   uuid: true,
   ip: true,
@@ -555,7 +555,7 @@ const RAW_EVENT_SELECT = {
   coordinates: true,
 } as const
 
-function mapRawEventToProcessed(r: {
+export function mapRawEventToProcessed(r: {
   visitorKey: string
   uuid: string | null
   ip: string | null
@@ -589,6 +589,10 @@ function mapRawEventToProcessed(r: {
     title: r.title ?? undefined,
     coordinates: r.coordinates as { lat: number; lng: number } | null | undefined,
   }
+}
+
+export async function getTenantTrackingConfig(tenantId: string): Promise<TenantTrackingConfig> {
+  return loadTenantTrackingConfig(tenantId)
 }
 
 async function loadTenantTrackingConfig(tenantId: string): Promise<TenantTrackingConfig> {
@@ -630,7 +634,7 @@ function mapEventToDbRow(event: ProcessedEvent, tenantId: string, uploadId: stri
 }
 
 /** After visitor profiles are upserted, persist upload stats and mark completed. */
-async function finalizeCompletedUpload(args: {
+export async function finalizeCompletedUpload(args: {
   uploadId: string
   tenantId: string
   totalProcessed: number
@@ -988,9 +992,94 @@ export async function processCSVUpload(
 }
 
 /**
+ * Ingest parsed CSV text (one chunk). Returns event count and timestamp bounds.
+ */
+export async function ingestCsvTextRows(
+  tenantId: string,
+  uploadId: string,
+  csvText: string,
+  options?: {
+    onIdentity?: (visitorKey: string, identity: IdentityData) => Promise<void>
+    pixelFormatAlreadySaved?: boolean
+  }
+): Promise<{
+  eventsInserted: number
+  minTs: number | null
+  maxTs: number | null
+  pixelFormatSaved: boolean
+}> {
+  const parseResult = Papa.parse<CSVRow>(csvText, {
+    header: true,
+    skipEmptyLines: true,
+    transformHeader: (header) => header.trim(),
+  })
+
+  if (parseResult.errors.length > 0) {
+    console.warn('[ingestCsvTextRows] parse warnings:', parseResult.errors.slice(0, 3))
+  }
+
+  let minTs: number | null = null
+  let maxTs: number | null = null
+  let eventsInserted = 0
+  let pixelFormatSaved = options?.pixelFormatAlreadySaved ?? false
+  const batch: ProcessedEvent[] = []
+  const insertBatchSize = 200
+  const seenIdentity = new Set<string>()
+
+  const flush = async () => {
+    if (batch.length === 0) return
+    const toInsert = batch.splice(0, batch.length)
+    await prisma.rawEvent.createMany({
+      data: toInsert.map((e) => mapEventToDbRow(e, tenantId, uploadId)),
+      skipDuplicates: false,
+    })
+    eventsInserted += toInsert.length
+    await safeUploadSetProcessedRows(uploadId, eventsInserted)
+  }
+
+  for (const row of parseResult.data) {
+    if (!row || Object.keys(row).length === 0) continue
+    if (!pixelFormatSaved) {
+      const fmt = detectPixelFormatFromCsvRow(row)
+      pixelFormatSaved = true
+      await safeUploadSetPixelFormat(uploadId, fmt)
+    }
+
+    const parsedEvents = parseRowsFromCsvRow(row)
+    for (const event of parsedEvents) {
+      event.rawJson = undefined
+      batch.push(event)
+
+      if (
+        event.visitorKey !== 'unknown' &&
+        !seenIdentity.has(event.visitorKey) &&
+        options?.onIdentity
+      ) {
+        seenIdentity.add(event.visitorKey)
+        const id = extractIdentityFromRow(row)
+        if (Object.keys(id).length > 0) {
+          await options.onIdentity(event.visitorKey, id)
+        }
+      }
+
+      const t = event.eventTs.getTime()
+      if (minTs == null || t < minTs) minTs = t
+      if (maxTs == null || t > maxTs) maxTs = t
+    }
+
+    if (batch.length >= insertBatchSize) {
+      await flush()
+    }
+  }
+
+  await flush()
+  return { eventsInserted, minTs, maxTs, pixelFormatSaved }
+}
+
+/**
  * Process visitor profile from events
  */
-async function processVisitorProfile(
+export async function processVisitorProfile(
   tenantId: string,
   visitorKey: string,
   events: ProcessedEvent[],

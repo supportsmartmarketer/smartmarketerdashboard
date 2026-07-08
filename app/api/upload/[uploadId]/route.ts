@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { parseUploadJobState } from '@/lib/upload-job-state'
 
 const uploadSelectFull = {
   id: true,
@@ -18,6 +19,7 @@ const uploadSelectFull = {
   visitorProfileTotal: true,
   visitorProfileProcessed: true,
   pixelFormat: true,
+  ingestAux: true,
 } as const
 
 const uploadSelectLegacy = {
@@ -86,7 +88,20 @@ export async function GET(
       return NextResponse.json({ error: 'Upload does not belong to this client' }, { status: 403 })
     }
 
-    return NextResponse.json(upload)
+    const jobState = parseUploadJobState(
+      typeof upload.ingestAux === 'string' ? upload.ingestAux : null
+    )
+    const jobProgress =
+      jobState?.mode === 'chunked'
+        ? {
+            mode: 'chunked' as const,
+            phase: jobState.phase ?? null,
+            chunksReceived: jobState.receivedChunks?.length ?? 0,
+            totalChunks: jobState.totalChunks ?? null,
+          }
+        : null
+
+    return NextResponse.json({ ...upload, jobProgress })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
