@@ -1,10 +1,4 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/process-uploads",
-      "schedule": "* * * * *"
-    }
-  ],
   "functions": {
     "app/api/upload/route.ts": {
       "maxDuration": 300
