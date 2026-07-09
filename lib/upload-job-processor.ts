@@ -137,17 +137,14 @@ async function listVisitorKeysBatch(
   offset: number,
   limit: number
 ): Promise<string[]> {
-  const rows = await prisma.$queryRaw<Array<{ visitor_key: string }>>`
-    SELECT DISTINCT visitor_key
-    FROM raw_events
-    WHERE upload_id = ${uploadId}::uuid
-      AND tenant_id = ${tenantId}::uuid
-      AND visitor_key <> 'unknown'
-    ORDER BY visitor_key
-    OFFSET ${offset}
-    LIMIT ${limit}
-  `
-  return rows.map((r) => r.visitor_key)
+  const rows = await prisma.rawEvent.groupBy({
+    by: ['visitorKey'],
+    where: { uploadId, tenantId, visitorKey: { not: 'unknown' } },
+    orderBy: { visitorKey: 'asc' },
+    skip: offset,
+    take: limit,
+  })
+  return rows.map((r) => r.visitorKey)
 }
 
 async function ingestOneChunk(

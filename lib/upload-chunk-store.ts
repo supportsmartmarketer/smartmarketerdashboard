@@ -23,7 +23,7 @@ export async function saveUploadChunk(
 
   await prisma.$executeRaw`
     INSERT INTO upload_chunks (id, upload_id, chunk_index, content)
-    VALUES (${randomUUID()}, ${uploadId}, ${chunkIndex}, ${content})
+    VALUES (${randomUUID()}::uuid, ${uploadId}::uuid, ${chunkIndex}, ${content})
     ON CONFLICT (upload_id, chunk_index)
     DO UPDATE SET content = EXCLUDED.content
   `
@@ -46,7 +46,7 @@ export async function loadUploadChunk(
 
   const rows = await prisma.$queryRaw<Array<{ content: string }>>`
     SELECT content FROM upload_chunks
-    WHERE upload_id = ${uploadId} AND chunk_index = ${chunkIndex}
+    WHERE upload_id::text = ${uploadId} AND chunk_index = ${chunkIndex}
     LIMIT 1
   `
   return rows[0]?.content ?? null
@@ -60,7 +60,7 @@ export async function deleteUploadChunk(uploadId: string, chunkIndex: number): P
     // fall through
   }
   await prisma.$executeRaw`
-    DELETE FROM upload_chunks WHERE upload_id = ${uploadId} AND chunk_index = ${chunkIndex}
+    DELETE FROM upload_chunks WHERE upload_id::text = ${uploadId} AND chunk_index = ${chunkIndex}
   `
 }
 
@@ -90,7 +90,7 @@ export async function saveUploadVisitorIdentity(
 
   await prisma.$executeRaw`
     INSERT INTO upload_visitor_identities (upload_id, visitor_key, identity)
-    VALUES (${uploadId}, ${visitorKey}, ${JSON.stringify(identity)}::jsonb)
+    VALUES (${uploadId}::uuid, ${visitorKey}, ${JSON.stringify(identity)}::jsonb)
     ON CONFLICT (upload_id, visitor_key)
     DO UPDATE SET identity = EXCLUDED.identity
   `
@@ -117,7 +117,7 @@ export async function loadUploadVisitorIdentity(
 
   const rows = await prisma.$queryRaw<Array<{ identity: unknown }>>`
     SELECT identity FROM upload_visitor_identities
-    WHERE upload_id = ${uploadId} AND visitor_key = ${visitorKey}
+    WHERE upload_id::text = ${uploadId} AND visitor_key = ${visitorKey}
     LIMIT 1
   `
   const id = rows[0]?.identity
