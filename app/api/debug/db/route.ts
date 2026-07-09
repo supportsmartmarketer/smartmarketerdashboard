@@ -90,12 +90,38 @@ export async function GET(request: NextRequest) {
       },
     })
 
+    // Map / geo diagnostics (no PII — counts only)
+    let uploadIdentityCount: number | null = null
+    let profilesWithLatLng = 0
+    let profilesWithCityState = 0
+    try {
+      uploadIdentityCount = await prisma.uploadVisitorIdentity.count()
+      profilesWithLatLng = await prisma.visitorProfile.count({
+        where: { lat: { not: null }, lng: { not: null } },
+      })
+      profilesWithCityState = await prisma.visitorProfile.count({
+        where: {
+          OR: [{ city: { not: null } }, { region: { not: null } }],
+        },
+      })
+    } catch {
+      uploadIdentityCount = -1
+    }
+
     return NextResponse.json({
       summary: {
         tenantsCount: tenants.length,
         uploadsCount: uploads.length,
         rawEventsCount,
         visitorProfilesCount,
+      },
+      mapDiagnostics: {
+        uploadIdentityRows: uploadIdentityCount,
+        profilesWithLatLng,
+        profilesWithCityState,
+        geoCacheRows: geoCacheEntries.length,
+        note:
+          'v4 CSV maps use PERSONAL_CITY/PERSONAL_STATE via upload_visitor_identities or profile.identity — no GEO_API_KEY required. If uploadIdentityRows is 0 after upload, run prisma/add_upload_chunks.sql or npx prisma db push.',
       },
       tenants,
       recentUploads: uploads,
