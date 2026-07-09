@@ -17,6 +17,7 @@ import {
   loadProfilesActiveInCalendarWindow,
   parseDashboardWindowParam,
 } from '@/lib/dashboard-window'
+import { resolveProfileMapLocation } from '@/lib/geo-fallback'
 
 export async function GET(request: NextRequest) {
   try {
@@ -236,6 +237,15 @@ export async function GET(request: NextRequest) {
       },
       profiles: profiles.map((p: any) => {
         const live = windowEventsByVisitor.get(p.visitorKey)
+        const mapLoc = resolveProfileMapLocation({
+          visitorKey: p.visitorKey,
+          lat: p.lat,
+          lng: p.lng,
+          city: p.city,
+          region: p.region,
+          country: p.country,
+          identity: p.identity,
+        })
         return {
           id: p.id,
           visitorKey: p.visitorKey,
@@ -251,11 +261,12 @@ export async function GET(request: NextRequest) {
           flags: live?.flags ?? p.flags,
           engagementScore: p.engagementScore,
           engagementSegment: p.engagementSegment,
-          lat: p.lat,
-          lng: p.lng,
-          city: p.city,
-          region: p.region,
+          lat: mapLoc?.lat ?? p.lat,
+          lng: mapLoc?.lng ?? p.lng,
+          city: mapLoc?.city ?? p.city,
+          region: mapLoc?.region ?? p.region,
           country: p.country,
+          mapApproximate: mapLoc?.approximate ?? false,
           identity: p.identity,
           ip: ipMap.get(p.visitorKey) || null,
         }

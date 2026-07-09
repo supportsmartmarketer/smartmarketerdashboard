@@ -8,10 +8,12 @@ interface Visitor {
   lat: number | null
   lng: number | null
   city: string | null
+  region?: string | null
   engagementScore: number
   visitsCount: number
   totalTimeOnPageMs: number
   lastSeenAt: string
+  mapApproximate?: boolean
 }
 
 interface VisitorMapProps {
@@ -168,6 +170,14 @@ export default function VisitorMap({
       Number.isFinite(v.lat) &&
       Number.isFinite(v.lng)
   ).length
+  const approximateCount = visitors.filter(
+    (v) =>
+      v.mapApproximate &&
+      typeof v.lat === 'number' &&
+      typeof v.lng === 'number' &&
+      Number.isFinite(v.lat) &&
+      Number.isFinite(v.lng)
+  ).length
   const isProcessingUpload = Boolean(
     processingUploadId && tenantId && !processingDismissed
   )
@@ -208,10 +218,12 @@ export default function VisitorMap({
         <h2 className="text-lg font-semibold text-gray-900">Visitor Map</h2>
         <p className="mt-1 text-sm text-gray-500">
           {coordCount > 0
-            ? `${coordCount} visitors with location data`
+            ? approximateCount > 0
+              ? `${coordCount} visitors on map (${approximateCount} approximate state-level from city/state in CSV)`
+              : `${coordCount} visitors with location data`
             : isProcessingUpload
               ? 'Locations will appear here as visitor profiles are built and geocoded.'
-              : 'No location data — re-upload CSV with address or IP for map'}
+              : 'No location data — CSV needs city/state, address, or IP for map'}
         </p>
       </div>
       <div ref={containerRef} className="relative h-96 w-full">
@@ -220,7 +232,7 @@ export default function VisitorMap({
             <p className="max-w-xs px-4 text-center text-sm text-gray-600">
               {isProcessingUpload
                 ? 'Map points appear after profiles finish processing. Try Refresh map data or check back shortly.'
-                : 'Re-upload CSV with address fields for accurate map'}
+                : 'Add city/state or address columns in your CSV to show visitors on the map'}
             </p>
           </div>
         )}

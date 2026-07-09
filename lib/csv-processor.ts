@@ -24,6 +24,7 @@ import {
   createStandardProfileJobState,
   serializeUploadJobState,
 } from './upload-job-state'
+import { approximateGeoFromPlace } from './geo-fallback'
 
 /** Progress polling; ignore if `processed_rows` column is missing on old DBs. */
 async function safeUploadSetProcessedRows(uploadId: string, processedRows: number) {
@@ -1180,17 +1181,35 @@ export async function processVisitorProfile(
         ? existingProfile.identity
         : null
 
-  // Get geo: prefer address geocoding when sheet has address (accurate map), else IP-based
+  // Get geo: city/state from sheet (local lookup), street via Nominatim, then IP, then state fallback
   let geo: { lat?: number; lng?: number; city?: string; region?: string; country?: string } = {}
-  const addressFromSheet  = id?.address || id?.companyAddress
-  const cityFromSheet     = id?.city
-  const stateFromSheet    = id?.state
-  const zipFromSheet      = id?.zip
-  const countryFromSheet  = id?.country || 'US'
-  const hasAddressFromSheet = !!(addressFromSheet || cityFromSheet || stateFromSheet || zipFromSheet)
+  const addressFromSheet = id?.address || id?.companyAddress
+  const cityFromSheet = id?.city
+  const stateFromSheet = id?.state
+  const zipFromSheet = id?.zip
+  const countryFromSheet = id?.country || 'US'
+  const hasStreetAddress = !!addressFromSheet?.trim()
+  const hasPlaceFromSheet = !!(cityFromSheet || stateFromSheet || zipFromSheet)
 
-  if (hasAddressFromSheet) {
-    // Prefer address geocoding when sheet has address - map shows accurate location
+  if (hasPlaceFromSheet && !hasStreetAddress) {
+    const local = approximateGeoFromPlace(
+      cityFromSheet,
+      stateFromSheet,
+      countryFromSheet,
+      visitorKey
+    )
+    if (local?.lat && local?.lng) {
+      geo = {
+        lat: local.lat,
+        lng: local.lng,
+        city: local.city || cityFromSheet || undefined,
+        region: local.region || stateFromSheet || undefined,
+        country: local.country || countryFromSheet || undefined,
+      }
+    }
+  }
+
+  if ((!geo.lat || !geo.lng) && hasStreetAddress) {
     const { geocodeAddress } = await import('./geo')
     const addressGeo = await geocodeAddress(
       addressFromSheet || '',
@@ -1207,12 +1226,10 @@ export async function processVisitorProfile(
         region: addressGeo.region || stateFromSheet || undefined,
         country: addressGeo.country || countryFromSheet || undefined,
       }
-      console.log(`Using address geocode for visitor ${visitorKey}:`, geo)
     }
   }
 
   if (!geo.lat || !geo.lng) {
-    // Fallback: IP-based geo or event coordinates
     const eventWithGeo = events.find((e) => e.coordinates || e.ip)
     if (eventWithGeo) {
       if (eventWithGeo.coordinates) {
@@ -1220,16 +1237,36 @@ export async function processVisitorProfile(
           lat: eventWithGeo.coordinates.lat,
           lng: eventWithGeo.coordinates.lng,
         }
-        console.log(`Using event coordinates for visitor ${visitorKey}:`, geo)
       } else if (eventWithGeo.ip) {
         const geoData = await getGeoLocation(eventWithGeo.ip)
-        if (geoData) {
+        if (geoData?.lat && geoData?.lng) {
           geo = geoData
-          console.log(`Using IP geo for visitor ${visitorKey}:`, geo)
         }
       }
     }
   }
+
+  if ((!geo.lat || !geo.lng) && hasPlaceFromSheet) {
+    const local = approximateGeoFromPlace(
+      cityFromSheet,
+      stateFromSheet,
+      countryFromSheet,
+      visitorKey
+    )
+    if (local?.lat && local?.lng) {
+      geo = {
+        lat: local.lat,
+        lng: local.lng,
+        city: local.city || cityFromSheet || undefined,
+        region: local.region || stateFromSheet || undefined,
+        country: local.country || countryFromSheet || undefined,
+      }
+    }
+  }
+
+  const profileCity = geo.city || cityFromSheet || null
+  const profileRegion = geo.region || stateFromSheet || null
+  const profileCountry = geo.country || countryFromSheet || null
 
   // Upsert visitor profile
   await prisma.visitorProfile.upsert({
@@ -1255,9 +1292,9 @@ export async function processVisitorProfile(
       engagementSegment: segment,
       lat: geo.lat || null,
       lng: geo.lng || null,
-      city: geo.city || null,
-      region: geo.region || null,
-      country: geo.country || null,
+      city: profileCity,
+      region: profileRegion,
+      country: profileCountry,
       identity: identityPayload,
       updatedAt: new Date(),
     },
@@ -1280,9 +1317,9 @@ export async function processVisitorProfile(
       engagementSegment: segment,
       lat: geo.lat || null,
       lng: geo.lng || null,
-      city: geo.city || null,
-      region: geo.region || null,
-      country: geo.country || null,
+      city: profileCity,
+      region: profileRegion,
+      country: profileCountry,
       identity: identityPayload,
     },
   })
