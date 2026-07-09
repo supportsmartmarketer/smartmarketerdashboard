@@ -7,6 +7,7 @@ import os from 'os'
 import { randomUUID } from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { processCSVUploadFromStream } from '@/lib/csv-processor'
+import { kickUploadProcessing } from '@/lib/upload-job-processor'
 import { createUploadRecordResilient } from '@/lib/upload-create-compat'
 
 /** Large CSV ingest + profiles — up to 800s on Vercel Pro. */
@@ -89,7 +90,10 @@ export async function POST(request: NextRequest) {
       const readStream = fs.createReadStream(tempPath)
       try {
         const result = await processCSVUploadFromStream(tenantId, upload.id, readStream)
-        console.log(`Upload ${upload.id} processed:`, result)
+        console.log(`Upload ${upload.id} ingest:`, result)
+        if (!result.error) {
+          await kickUploadProcessing(upload.id)
+        }
       } catch (error: unknown) {
         console.error(`Upload ${upload.id} failed:`, error)
         const msg = error instanceof Error ? error.message : 'Processing failed'

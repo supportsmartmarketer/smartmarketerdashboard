@@ -3,7 +3,7 @@ export type UploadJobPhase = 'receiving' | 'ingest' | 'profiles' | 'finalize'
 
 export type UploadJobState = {
   v: 1
-  mode: 'single' | 'chunked'
+  mode: 'single' | 'chunked' | 'standard'
   phase?: UploadJobPhase
   totalChunks?: number
   receivedChunks?: number[]
@@ -59,5 +59,24 @@ export function markChunkReceived(state: UploadJobState, chunkIndex: number): Up
   return {
     ...state,
     receivedChunks: [...received].sort((a, b) => a - b),
+  }
+}
+
+/** After row ingest (single-file upload), defer visitor profiles to cron/resumable batches. */
+export function createStandardProfileJobState(args: {
+  minTs: number
+  maxTs: number
+  windowStart: string
+  windowEnd: string
+}): UploadJobState {
+  return {
+    v: 1,
+    mode: 'standard',
+    phase: 'profiles',
+    minTs: args.minTs,
+    maxTs: args.maxTs,
+    windowStart: args.windowStart,
+    windowEnd: args.windowEnd,
+    lockUntil: null,
   }
 }

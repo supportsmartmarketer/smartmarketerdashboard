@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
 /**
- * DELETE — Remove all analytics/upload data for a tenant while keeping the client row
- * (name, domain, showFinancialInsights). Upload deletion cascades raw_events.
+ * DELETE — Remove all analytics/upload data for a tenant while keeping the client row.
+ * Sequential deletes avoid Prisma's default 5s interactive transaction timeout on large clients.
  */
 export async function DELETE(
   _request: NextRequest,
@@ -23,11 +23,16 @@ export async function DELETE(
       return NextResponse.json({ error: 'Client not found' }, { status: 404 })
     }
 
-    await prisma.$transaction([
-      prisma.tenantSummary.deleteMany({ where: { tenantId: id } }),
-      prisma.visitorProfile.deleteMany({ where: { tenantId: id } }),
-      prisma.upload.deleteMany({ where: { tenantId: id } }),
-    ])
+    // Cancel in-flight uploads so cron does not keep writing mid-delete
+    await prisma.upload.updateMany({
+      where: { tenantId: id, status: { in: ['pending', 'processing'] } },
+      data: { status: 'error', error: 'Cancelled — client data was cleared' },
+    })
+
+    await prisma.tenantSummary.deleteMany({ where: { tenantId: id } })
+    await prisma.visitorProfile.deleteMany({ where: { tenantId: id } })
+    // Cascades raw_events, upload_chunks, upload_visitor_identities
+    await prisma.upload.deleteMany({ where: { tenantId: id } })
 
     return NextResponse.json({ success: true })
   } catch (error: unknown) {

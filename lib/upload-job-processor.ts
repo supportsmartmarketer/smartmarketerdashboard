@@ -16,13 +16,15 @@ import {
 } from '@/lib/upload-chunk-store'
 import {
   chunkReceiveComplete,
+  createStandardProfileJobState,
   parseUploadJobState,
   serializeUploadJobState,
   type UploadJobState,
 } from '@/lib/upload-job-state'
 
-const VISITORS_PER_PROFILE_BATCH = 40
-const DEFAULT_MAX_MS = 240_000
+const VISITORS_PER_PROFILE_BATCH = 35
+const DEFAULT_MAX_MS = 280_000
+const LOCK_MS = 120_000
 
 async function persistJobState(uploadId: string, state: UploadJobState): Promise<void> {
   await prisma.upload.update({
@@ -36,7 +38,7 @@ async function tryAcquireJobLock(uploadId: string, state: UploadJobState): Promi
   if (state.lockUntil != null && state.lockUntil > now) {
     return null
   }
-  const locked: UploadJobState = { ...state, lockUntil: now + DEFAULT_MAX_MS }
+  const locked: UploadJobState = { ...state, lockUntil: now + LOCK_MS }
   await persistJobState(uploadId, locked)
   return locked
 }
@@ -73,6 +75,51 @@ async function safeSetVisitorProfileProgress(uploadId: string, processed: number
     const msg = e instanceof Error ? e.message : String(e)
     if (!msg.includes('visitor_profile')) throw e
   }
+}
+
+function profilesIncomplete(total: number | null, processed: number | null): boolean {
+  if (total == null || total <= 0) return false
+  return (processed ?? 0) < total
+}
+
+/** Rebuild job state for uploads stuck mid-profile (e.g. timed out before cron existed). */
+async function recoverProfileJobState(
+  uploadId: string,
+  tenantId: string,
+  upload: {
+    visitorProfileTotal: number | null
+    visitorProfileProcessed: number | null
+    ingestAux: string | null
+  }
+): Promise<UploadJobState | null> {
+  const existing = parseUploadJobState(upload.ingestAux)
+  if (existing && (existing.mode === 'chunked' || existing.mode === 'standard')) {
+    return existing
+  }
+
+  const total = upload.visitorProfileTotal
+  const processed = upload.visitorProfileProcessed ?? 0
+  if (!profilesIncomplete(total, processed)) return null
+
+  const bounds = await prisma.rawEvent.aggregate({
+    where: { uploadId, tenantId },
+    _min: { eventTs: true },
+    _max: { eventTs: true },
+  })
+  if (!bounds._min.eventTs || !bounds._max.eventTs) return null
+
+  const minTs = bounds._min.eventTs.getTime()
+  const maxTs = bounds._max.eventTs.getTime()
+  const { windowStart, windowEnd } = computeWindowFromBounds(minTs, maxTs)
+
+  const state = createStandardProfileJobState({
+    minTs,
+    maxTs,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+  })
+  await persistJobState(uploadId, state)
+  return state
 }
 
 async function countDistinctVisitors(uploadId: string, tenantId: string): Promise<number> {
@@ -193,7 +240,7 @@ async function processProfileBatch(
   const trackingConfig = await getTenantTrackingConfig(tenantId)
   const keys = await listVisitorKeysBatch(uploadId, tenantId, processed, VISITORS_PER_PROFILE_BATCH)
   if (keys.length === 0) {
-    return { state, profilesComplete: true }
+    return { state, profilesComplete: processed >= total }
   }
 
   let done = processed
@@ -263,8 +310,30 @@ async function finalizeChunkedUpload(
   })
 }
 
+function uploadNeedsWork(row: {
+  status: string
+  ingestAux: string | null
+  visitorProfileTotal: number | null
+  visitorProfileProcessed: number | null
+}): boolean {
+  if (row.status === 'pending') {
+    const state = parseUploadJobState(row.ingestAux)
+    return !!state && state.mode === 'chunked' && chunkReceiveComplete(state)
+  }
+  if (row.status !== 'processing') return false
+
+  const state = parseUploadJobState(row.ingestAux)
+  if (state?.mode === 'chunked') {
+    if (state.phase === 'receiving' && !chunkReceiveComplete(state)) return false
+    return true
+  }
+  if (state?.mode === 'standard' && state.phase === 'profiles') return true
+
+  return profilesIncomplete(row.visitorProfileTotal, row.visitorProfileProcessed)
+}
+
 /**
- * Process the next ingest/profile batches for a chunked upload until maxMs elapses or job completes.
+ * Process the next ingest/profile batches for an upload until maxMs elapses or job completes.
  */
 export async function processUploadJobBatch(
   uploadId: string,
@@ -277,6 +346,8 @@ export async function processUploadJobBatch(
       tenantId: true,
       status: true,
       ingestAux: true,
+      visitorProfileTotal: true,
+      visitorProfileProcessed: true,
     },
   })
 
@@ -285,12 +356,13 @@ export async function processUploadJobBatch(
     return { processed: false, completed: upload.status === 'completed' }
   }
 
-  let state = parseUploadJobState(upload.ingestAux)
-  if (!state || state.mode !== 'chunked') {
-    return { processed: false, completed: false }
-  }
+  let state =
+    parseUploadJobState(upload.ingestAux) ??
+    (await recoverProfileJobState(uploadId, upload.tenantId, upload))
 
-  if (state.phase === 'receiving' && !chunkReceiveComplete(state)) {
+  if (!state) return { processed: false, completed: false }
+
+  if (state.mode === 'chunked' && state.phase === 'receiving' && !chunkReceiveComplete(state)) {
     return { processed: false, completed: false }
   }
 
@@ -300,18 +372,23 @@ export async function processUploadJobBatch(
 
   const deadline = Date.now() + (options?.maxMs ?? DEFAULT_MAX_MS)
   let didWork = false
+  let activeState: UploadJobState = state
 
   try {
-    if (upload.status === 'pending' && chunkReceiveComplete(state)) {
+    if (upload.status === 'pending' && state.mode === 'chunked' && chunkReceiveComplete(state)) {
       await prisma.upload.update({
         where: { id: uploadId },
         data: { status: 'processing' },
       })
       state = { ...state, phase: 'ingest', ingestChunkIndex: state.ingestChunkIndex ?? 0 }
+      activeState = state
       await persistJobState(uploadId, state)
     }
 
-    if (state.phase === 'ingest' || (state.phase === 'receiving' && chunkReceiveComplete(state))) {
+    if (
+      state.mode === 'chunked' &&
+      (state.phase === 'ingest' || (state.phase === 'receiving' && chunkReceiveComplete(state)))
+    ) {
       state = { ...state, phase: 'ingest' }
       while (Date.now() < deadline) {
         const { state: nextState, ingestComplete } = await ingestOneChunk(
@@ -321,16 +398,27 @@ export async function processUploadJobBatch(
         )
         state = nextState
         didWork = true
+        activeState = state
         await persistJobState(uploadId, state)
         if (ingestComplete) {
           state = await beginProfilePhase(uploadId, upload.tenantId, state)
+          activeState = state
           await persistJobState(uploadId, state)
           break
         }
       }
     }
 
-    if (state.phase === 'profiles' && Date.now() < deadline) {
+    const inProfilePhase =
+      state.phase === 'profiles' ||
+      state.mode === 'standard' ||
+      profilesIncomplete(upload.visitorProfileTotal, upload.visitorProfileProcessed)
+
+    if (inProfilePhase && Date.now() < deadline) {
+      if (state.mode === 'standard' || state.phase !== 'profiles') {
+        state = { ...state, mode: state.mode === 'chunked' ? 'chunked' : 'standard', phase: 'profiles' }
+        activeState = state
+      }
       while (Date.now() < deadline) {
         const { state: nextState, profilesComplete } = await processProfileBatch(
           uploadId,
@@ -339,9 +427,12 @@ export async function processUploadJobBatch(
         )
         state = nextState
         didWork = true
+        activeState = state
         await persistJobState(uploadId, state)
         if (profilesComplete) {
           state = { ...state, phase: 'finalize' }
+          activeState = state
+          await releaseJobLock(uploadId, state)
           await persistJobState(uploadId, state)
           await finalizeChunkedUpload(uploadId, upload.tenantId, state)
           return { processed: true, completed: true }
@@ -357,23 +448,19 @@ export async function processUploadJobBatch(
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Processing failed'
     console.error(`[upload-job] ${uploadId} failed:`, error)
-    await prisma.upload.update({
-      where: { id: uploadId },
-      data: { status: 'error', error: msg },
-    }).catch(() => {})
+    await prisma.upload
+      .update({
+        where: { id: uploadId },
+        data: { status: 'error', error: msg },
+      })
+      .catch(() => {})
     return { processed: true, completed: false }
   } finally {
-    const latest = parseUploadJobState(
-      (await prisma.upload.findUnique({ where: { id: uploadId }, select: { ingestAux: true } }))
-        ?.ingestAux
-    )
-    if (latest) {
-      await releaseJobLock(uploadId, latest)
-    }
+    await releaseJobLock(uploadId, activeState).catch(() => {})
   }
 }
 
-/** Drain all chunked uploads that need work (for cron). */
+/** Drain uploads that need ingest or profile work (for cron). */
 export async function processPendingUploadJobs(options?: {
   maxMs?: number
   maxUploads?: number
@@ -382,20 +469,23 @@ export async function processPendingUploadJobs(options?: {
   const candidates = await prisma.upload.findMany({
     where: {
       status: { in: ['pending', 'processing'] },
-      ingestAux: { not: null },
     },
     orderBy: { createdAt: 'asc' },
-    take: 20,
-    select: { id: true, ingestAux: true },
+    take: 30,
+    select: {
+      id: true,
+      status: true,
+      ingestAux: true,
+      visitorProfileTotal: true,
+      visitorProfileProcessed: true,
+    },
   })
 
   let uploadsTouched = 0
   let completed = 0
 
   for (const row of candidates) {
-    const state = parseUploadJobState(row.ingestAux)
-    if (!state || state.mode !== 'chunked') continue
-    if (state.phase === 'receiving' && !chunkReceiveComplete(state)) continue
+    if (!uploadNeedsWork(row)) continue
     if (uploadsTouched >= maxUploads) break
 
     const result = await processUploadJobBatch(row.id, { maxMs: options?.maxMs ?? 120_000 })
@@ -406,7 +496,10 @@ export async function processPendingUploadJobs(options?: {
   return { uploadsTouched, completed }
 }
 
-/** Call when the final chunk arrives to start processing immediately. */
-export async function kickChunkedUploadProcessing(uploadId: string): Promise<void> {
+/** Start or continue processing immediately after upload ingest. */
+export async function kickUploadProcessing(uploadId: string): Promise<void> {
   await processUploadJobBatch(uploadId, { maxMs: DEFAULT_MAX_MS })
 }
+
+/** @deprecated Use kickUploadProcessing */
+export const kickChunkedUploadProcessing = kickUploadProcessing

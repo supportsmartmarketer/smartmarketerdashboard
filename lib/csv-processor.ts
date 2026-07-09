@@ -19,6 +19,11 @@ import {
   type TenantTrackingConfig,
 } from './tenant-tracking-config'
 import { detectPixelFormatFromCsvRow, type PixelFormat } from './pixel-format'
+import { saveUploadVisitorIdentity } from './upload-chunk-store'
+import {
+  createStandardProfileJobState,
+  serializeUploadJobState,
+} from './upload-job-state'
 
 /** Progress polling; ignore if `processed_rows` column is missing on old DBs. */
 async function safeUploadSetProcessedRows(uploadId: string, processedRows: number) {
@@ -712,6 +717,40 @@ export async function finalizeCompletedUpload(args: {
   }
 }
 
+/** Persist identities and queue visitor-profile build for cron/resumable batches. */
+async function deferProfileBuildPhase(args: {
+  uploadId: string
+  tenantId: string
+  minTs: number
+  maxTs: number
+  profileTotal: number
+  identityByVisitor: Map<string, IdentityData>
+}): Promise<void> {
+  for (const [visitorKey, identity] of args.identityByVisitor) {
+    if (visitorKey === 'unknown' || Object.keys(identity).length === 0) continue
+    await saveUploadVisitorIdentity(
+      args.uploadId,
+      visitorKey,
+      identity as Record<string, unknown>
+    )
+  }
+
+  const windowEnd = new Date(args.maxTs)
+  const windowStart = new Date(Math.max(args.minTs, args.maxTs - 30 * 24 * 60 * 60 * 1000))
+  const state = createStandardProfileJobState({
+    minTs: args.minTs,
+    maxTs: args.maxTs,
+    windowStart: windowStart.toISOString(),
+    windowEnd: windowEnd.toISOString(),
+  })
+
+  await safeUploadSetVisitorProfileProgress(args.uploadId, 0, args.profileTotal)
+  await prisma.upload.update({
+    where: { id: args.uploadId },
+    data: { ingestAux: serializeUploadJobState(state) },
+  })
+}
+
 /**
  * Process CSV from stream - never loads full file into memory (avoids OOM on large files)
  */
@@ -799,45 +838,14 @@ export async function processCSVUploadFromStream(
           const realVisitorKeys = [...visitorKeys].filter(k => k !== 'unknown')
           console.log(`Inserted ${totalProcessed} events, ${realVisitorKeys.length} real visitors + ${visitorKeys.has('unknown') ? 1 : 0} unknown (streaming)`)
 
-          const windowEnd = new Date(maxTs)
-          const windowStart = new Date(Math.max(minTs, maxTs - 30 * 24 * 60 * 60 * 1000))
-
-          const trackingConfig = await loadTenantTrackingConfig(tenantId)
-
           const profileTotal = realVisitorKeys.length
-          if (profileTotal > 0) {
-            await safeUploadSetVisitorProfileProgress(uploadId, 0, profileTotal)
-          }
-          for (let i = 0; i < realVisitorKeys.length; i++) {
-            const visitorKey = realVisitorKeys[i]
-            // Fetch events without rawJson (null in DB) to keep memory low
-            const rawEvents = await prisma.rawEvent.findMany({
-              where: { tenantId, uploadId, visitorKey },
-              orderBy: { eventTs: 'asc' },
-              select: RAW_EVENT_SELECT,
-            })
-            const events = rawEvents.map(mapRawEventToProcessed)
-            await processVisitorProfile(
-              tenantId,
-              visitorKey,
-              events,
-              windowStart,
-              windowEnd,
-              identityByVisitor.get(visitorKey),
-              trackingConfig
-            )
-            await safeUploadSetVisitorProfileProgress(uploadId, i + 1, profileTotal)
-          }
-
-          await finalizeCompletedUpload({
+          await deferProfileBuildPhase({
             uploadId,
             tenantId,
-            totalProcessed,
             minTs,
             maxTs,
-            uniqueVisitorsCount: realVisitorKeys.length,
-            windowStart,
-            windowEnd,
+            profileTotal,
+            identityByVisitor,
           })
           resolve({ rowCount: totalProcessed })
         } catch (err: any) {
@@ -936,45 +944,14 @@ export async function processCSVUpload(
       return { rowCount: 0, error: errorMsg }
     }
 
-    const windowEnd = new Date(maxTs)
-    const windowStart = new Date(Math.max(minTs, maxTs - 30 * 24 * 60 * 60 * 1000))
-
-    const trackingConfig = await loadTenantTrackingConfig(tenantId)
-
-    // Build visitor profiles one at a time; skip 'unknown' (would load ALL unidentified events at once)
     const profileTotal = realVisitorKeys.length
-    if (profileTotal > 0) {
-      await safeUploadSetVisitorProfileProgress(uploadId, 0, profileTotal)
-    }
-    for (let i = 0; i < realVisitorKeys.length; i++) {
-      const visitorKey = realVisitorKeys[i]
-      const rawEvents = await prisma.rawEvent.findMany({
-        where: { tenantId, uploadId, visitorKey },
-        orderBy: { eventTs: 'asc' },
-        select: RAW_EVENT_SELECT,
-      })
-      const events = rawEvents.map(mapRawEventToProcessed)
-      await processVisitorProfile(
-        tenantId,
-        visitorKey,
-        events,
-        windowStart,
-        windowEnd,
-        identityByVisitor.get(visitorKey),
-        trackingConfig
-      )
-      await safeUploadSetVisitorProfileProgress(uploadId, i + 1, profileTotal)
-    }
-
-    await finalizeCompletedUpload({
+    await deferProfileBuildPhase({
       uploadId,
       tenantId,
-      totalProcessed,
       minTs,
       maxTs,
-      uniqueVisitorsCount: realVisitorKeys.length,
-      windowStart,
-      windowEnd,
+      profileTotal,
+      identityByVisitor,
     })
 
     return { rowCount: totalProcessed }
