@@ -3,8 +3,13 @@
  * Run: npx tsx scripts/backfill-map-geo.ts
  */
 import 'dotenv/config'
+import type { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { approximateGeoFromPlace } from '../lib/geo-fallback.js'
+
+function asJson(v: unknown): Prisma.InputJsonValue {
+  return v as Prisma.InputJsonValue
+}
 
 async function backfillProfileCoords(tenantId?: string) {
   const where = tenantId ? { tenantId, lat: null } : { lat: null }
@@ -100,12 +105,13 @@ async function backfillUploadIdentities() {
     }
 
     for (const [visitorKey, identity] of identityByKey) {
+      const payload = asJson(identity)
       await prisma.uploadVisitorIdentity.upsert({
         where: {
           uploadId_visitorKey: { uploadId: upload.id, visitorKey },
         },
-        create: { uploadId: upload.id, visitorKey, identity },
-        update: { identity },
+        create: { uploadId: upload.id, visitorKey, identity: payload },
+        update: { identity: payload },
       })
       inserted++
     }
