@@ -17,6 +17,9 @@
     },
     "app/api/cron/process-uploads/route.ts": {
       "maxDuration": 800
+    },
+    "app/api/ai-summary/route.ts": {
+      "maxDuration": 120
     }
   }
 }

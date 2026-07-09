@@ -36,14 +36,17 @@ export async function loadProfilesActiveInCalendarWindow(
   const keys = keyRows.map((r) => r.visitorKey)
   if (keys.length === 0) return []
 
-  const profilesRaw = await prisma.visitorProfile.findMany({
-    where: { tenantId, visitorKey: { in: keys } },
-    orderBy: { windowEnd: 'desc' },
-  })
-
+  const CHUNK = 400
   const byKey = new Map<string, VisitorProfile>()
-  for (const p of profilesRaw) {
-    if (!byKey.has(p.visitorKey)) byKey.set(p.visitorKey, p)
+  for (let i = 0; i < keys.length; i += CHUNK) {
+    const slice = keys.slice(i, i + CHUNK)
+    const profilesRaw = await prisma.visitorProfile.findMany({
+      where: { tenantId, visitorKey: { in: slice } },
+      orderBy: { windowEnd: 'desc' },
+    })
+    for (const p of profilesRaw) {
+      if (!byKey.has(p.visitorKey)) byKey.set(p.visitorKey, p)
+    }
   }
   return [...byKey.values()]
 }

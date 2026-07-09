@@ -14,6 +14,10 @@ import {
   parseDashboardWindowParam,
 } from '@/lib/dashboard-window'
 
+/** OpenAI + DB aggregation can exceed the default 10s serverless limit. */
+export const maxDuration = 120
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams

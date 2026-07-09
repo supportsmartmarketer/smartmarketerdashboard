@@ -145,12 +145,29 @@ function normalizeSummary(data: Record<string, unknown>): Summary {
 
 export default function AISummary({ tenantId, window, uploadProcessing = false }: AISummaryProps) {
   const [summary, setSummary] = useState<Summary | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loadingExisting, setLoadingExisting] = useState(false)
+  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [revenueOpen, setRevenueOpen] = useState(true)
 
+  const busy = loadingExisting || generating
+
+  async function fetchWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit,
+    timeoutMs: number
+  ): Promise<Response> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   const loadSummary = useCallback(async () => {
-    setLoading(true)
+    setLoadingExisting(true)
     setError(null)
     try {
       const res = await fetch(`/api/ai-summary?tenantId=${tenantId}&window=${window}`)
@@ -169,36 +186,46 @@ export default function AISummary({ tenantId, window, uploadProcessing = false }
         setError(err.message || 'Failed to load summary')
       }
     } finally {
-      setLoading(false)
+      setLoadingExisting(false)
     }
   }, [tenantId, window])
 
   const generateSummary = async () => {
-    setLoading(true)
+    setGenerating(true)
     setError(null)
     try {
       const roiContext = getRoiContextForApi(tenantId)
-      const res = await fetch('/api/ai-summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenantId,
-          window,
-          forceRegenerate: true,
-          ...(roiContext ? { roiContext } : {}),
-        }),
-      })
+      const res = await fetchWithTimeout(
+        '/api/ai-summary',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenantId,
+            window,
+            forceRegenerate: true,
+            ...(roiContext ? { roiContext } : {}),
+          }),
+        },
+        110_000
+      )
       if (res.ok) {
         const data = await res.json()
         setSummary(normalizeSummary(data))
       } else {
-        const err = await res.json()
-        setError(err.error || 'Failed to generate summary')
+        const err = await res.json().catch(() => ({}))
+        setError((err as { error?: string }).error || 'Failed to generate summary')
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to generate summary')
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError(
+          'Summary generation timed out. The server may still be working — click Refresh in a minute, or try a shorter date window.'
+        )
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to generate summary')
+      }
     } finally {
-      setLoading(false)
+      setGenerating(false)
     }
   }
 
@@ -214,30 +241,37 @@ export default function AISummary({ tenantId, window, uploadProcessing = false }
           <div className="flex gap-2">
             <button
               onClick={loadSummary}
-              disabled={loading}
+              disabled={busy}
               className="rounded-md px-3 py-1 text-sm text-white disabled:opacity-50 btn-primary-orange"
             >
               Refresh
             </button>
             <button
               onClick={generateSummary}
-              disabled={loading || uploadProcessing}
-              title={
-                uploadProcessing
-                  ? 'Wait for the upload to finish processing before generating a summary'
-                  : undefined
-              }
+              disabled={busy}
               className="rounded-md px-3 py-1 text-sm text-white disabled:opacity-50 btn-primary-blue"
             >
-              {loading ? 'Generating...' : uploadProcessing ? 'Upload processing…' : 'Generate Summary'}
+              {generating ? 'Generating…' : 'Generate Summary'}
             </button>
           </div>
         </div>
+        {uploadProcessing && (
+          <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            Upload still processing — you can generate a summary from data loaded so far; refresh after
+            the upload completes for the full picture.
+          </p>
+        )}
       </div>
 
       <div className="p-6">
-        {loading && !summary && (
-          <div className="text-center text-gray-500">Loading...</div>
+        {loadingExisting && !summary && (
+          <div className="text-center text-gray-500">Loading saved summary…</div>
+        )}
+
+        {generating && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Generating summary — this usually takes 15–45 seconds for larger datasets.
+          </div>
         )}
 
         {error && (
@@ -338,7 +372,7 @@ export default function AISummary({ tenantId, window, uploadProcessing = false }
           </div>
         )}
 
-        {!summary && !loading && !error && (
+        {!summary && !busy && !error && (
           <div className="text-center text-gray-500">
             <p>No summary available. Click &quot;Generate Summary&quot; to create one.</p>
           </div>

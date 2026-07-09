@@ -232,22 +232,25 @@ Return as JSON:
 Do not include any PII (emails, phone numbers, names) in the output. You MAY reference cohort sizes ("N visitors with enrichment cues") derived from profilesWithResolvableContactHints. Focus on behavioral patterns supported by metrics and on URL-level intent where depth is lacking.`
 
   try {
-    const completion = await openai!.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a data analyst providing insights on visitor behavior. Always return valid JSON. Do not output PII (names, emails, phones). Respect pixel REPORTING constraints in the prompt: sparse V4-style feeds require identity/url/repeat-led guidance, not scroll micro-optimization fantasies.',
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7,
-    })
+    const completion = await openai!.chat.completions.create(
+      {
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a data analyst providing insights on visitor behavior. Always return valid JSON. Do not output PII (names, emails, phones). Respect pixel REPORTING constraints in the prompt: sparse V4-style feeds require identity/url/repeat-led guidance, not scroll micro-optimization fantasies.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.7,
+      },
+      { timeout: 90_000 }
+    )
 
     const content = completion.choices[0]?.message?.content
     if (!content) {
@@ -267,6 +270,14 @@ Do not include any PII (emails, phone numbers, names) in the output. You MAY ref
   } catch (error: unknown) {
     console.error('Error generating AI summary:', error)
     const msg = error instanceof Error ? error.message : 'Unknown error'
+    if (msg.includes('429') || msg.toLowerCase().includes('rate limit')) {
+      throw new Error(
+        'OpenAI rate limit reached. Check billing/quota on the API key, wait a minute, and try again.'
+      )
+    }
+    if (msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('timed out')) {
+      throw new Error('Summary generation timed out. Try again — if it keeps failing, use a shorter date window.')
+    }
     throw new Error(`Failed to generate AI summary: ${msg}`)
   }
 }
