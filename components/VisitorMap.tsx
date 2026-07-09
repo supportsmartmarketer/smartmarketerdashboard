@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
+import { resolveProfileMapLocation } from '@/lib/geo-fallback'
 
 interface Visitor {
   id: string
@@ -9,11 +10,36 @@ interface Visitor {
   lng: number | null
   city: string | null
   region?: string | null
+  country?: string | null
+  identity?: unknown
   engagementScore: number
   visitsCount: number
   totalTimeOnPageMs: number
   lastSeenAt: string
   mapApproximate?: boolean
+}
+
+function resolveVisitorForMap(visitor: Visitor): Visitor & { mapApproximate: boolean } {
+  const resolved = resolveProfileMapLocation({
+    visitorKey: visitor.visitorKey,
+    lat: visitor.lat,
+    lng: visitor.lng,
+    city: visitor.city,
+    region: visitor.region ?? null,
+    country: visitor.country ?? null,
+    identity: visitor.identity ?? null,
+  })
+  if (!resolved) {
+    return { ...visitor, mapApproximate: visitor.mapApproximate ?? false }
+  }
+  return {
+    ...visitor,
+    lat: resolved.lat,
+    lng: resolved.lng,
+    city: resolved.city ?? visitor.city,
+    region: resolved.region ?? visitor.region ?? null,
+    mapApproximate: resolved.approximate,
+  }
 }
 
 interface VisitorMapProps {
@@ -37,6 +63,12 @@ export default function VisitorMap({
   const [mapReady, setMapReady] = useState(false)
   const refreshRef = useRef(onRefreshDashboard)
   refreshRef.current = onRefreshDashboard
+
+  const mapVisitors = useMemo(
+    () => visitors.map(resolveVisitorForMap),
+    [visitors]
+  )
+
   /** Hide “still processing” as soon as this upload finishes (don’t wait for parent refetch) */
   const [processingDismissed, setProcessingDismissed] = useState(false)
 
@@ -108,7 +140,7 @@ export default function VisitorMap({
         })
         markersRef.current = []
 
-        const visitorsWithCoords = visitors.filter(
+        const visitorsWithCoords = mapVisitors.filter(
           (v) =>
             typeof v.lat === 'number' &&
             typeof v.lng === 'number' &&
@@ -140,7 +172,7 @@ export default function VisitorMap({
             <p style="margin: 2px 0;">Score: ${visitor.engagementScore}</p>
             <p style="margin: 2px 0;">Visits: ${visitor.visitsCount}</p>
             <p style="margin: 2px 0;">Time: ${Math.round((Number(visitor.totalTimeOnPageMs) || 0) / 1000)}s</p>
-            ${visitor.city ? `<p style="margin: 2px 0;">Location: ${visitor.city}</p>` : ''}
+            ${visitor.city || visitor.region ? `<p style="margin: 2px 0;">Location: ${[visitor.city, visitor.region].filter(Boolean).join(', ')}</p>` : ''}
           </div>
         `)
 
@@ -161,16 +193,16 @@ export default function VisitorMap({
     return () => {
       cancelled = true
     }
-  }, [visitors, mapReady])
+  }, [mapVisitors, mapReady])
 
-  const coordCount = visitors.filter(
+  const coordCount = mapVisitors.filter(
     (v) =>
       typeof v.lat === 'number' &&
       typeof v.lng === 'number' &&
       Number.isFinite(v.lat) &&
       Number.isFinite(v.lng)
   ).length
-  const approximateCount = visitors.filter(
+  const approximateCount = mapVisitors.filter(
     (v) =>
       v.mapApproximate &&
       typeof v.lat === 'number' &&

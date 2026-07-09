@@ -125,6 +125,75 @@ function readIdentityField(identity: unknown, ...keys: string[]): string | undef
   return undefined
 }
 
+/** Parse "City, ST 12345, US" style strings from company/personal address columns. */
+export function parsePlaceFromAddress(raw: string | null | undefined): {
+  city?: string
+  state?: string
+} {
+  if (!raw?.trim()) return {}
+  const parts = raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length < 2) return {}
+
+  let statePart = parts[parts.length - 1]
+  let cityPart = parts[parts.length - 2]
+
+  if (/^(us|usa|united states)$/i.test(statePart) && parts.length >= 3) {
+    statePart = parts[parts.length - 2]
+    cityPart = parts[parts.length - 3]
+  }
+
+  const stateToken =
+    statePart.match(/^([A-Za-z]{2})\b/)?.[1] ||
+    statePart.replace(/\d.*$/, '').trim()
+
+  return {
+    city: cityPart || undefined,
+    state: stateToken || undefined,
+  }
+}
+
+function pickPlaceFields(
+  city: string | null | undefined,
+  region: string | null | undefined,
+  identity: unknown
+): { city: string | null; region: string | null; country: string } {
+  let resolvedCity = city?.trim() || null
+  let resolvedRegion = region?.trim() || null
+
+  if (identity && typeof identity === 'object') {
+    resolvedCity =
+      resolvedCity ||
+      readIdentityField(identity, 'city', 'personal_city', 'company_city') ||
+      null
+    resolvedRegion =
+      resolvedRegion ||
+      readIdentityField(identity, 'state', 'personal_state', 'company_state') ||
+      null
+
+    if (!resolvedCity || !resolvedRegion) {
+      const address =
+        readIdentityField(
+          identity,
+          'address',
+          'companyAddress',
+          'company_address',
+          'personal_address'
+        ) || ''
+      const parsed = parsePlaceFromAddress(address)
+      resolvedCity = resolvedCity || parsed.city || null
+      resolvedRegion = resolvedRegion || parsed.state || null
+    }
+  }
+
+  const country =
+    readIdentityField(identity, 'country', 'personal_country', 'company_country') || 'US'
+
+  return { city: resolvedCity, region: resolvedRegion, country }
+}
+
 export type ResolvedMapLocation = {
   lat: number
   lng: number
@@ -158,18 +227,11 @@ export function resolveProfileMapLocation(profile: {
     }
   }
 
-  const city =
-    profile.city ||
-    readIdentityField(profile.identity, 'city', 'personal_city', 'company_city') ||
-    null
-  const region =
-    profile.region ||
-    readIdentityField(profile.identity, 'state', 'personal_state', 'company_state') ||
-    null
-  const country =
-    profile.country ||
-    readIdentityField(profile.identity, 'country', 'personal_country', 'company_country') ||
-    'US'
+  const { city, region, country } = pickPlaceFields(
+    profile.city,
+    profile.region,
+    profile.identity
+  )
 
   const approx = approximateGeoFromPlace(city, region, country, profile.visitorKey)
   if (!approx?.lat || !approx?.lng) return null

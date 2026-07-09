@@ -96,6 +96,36 @@ export async function saveUploadVisitorIdentity(
   `
 }
 
+export async function loadUploadIdentitiesBatch(
+  uploadId: string,
+  visitorKeys: string[]
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>()
+  if (visitorKeys.length === 0) return out
+
+  const CHUNK = 400
+  for (let i = 0; i < visitorKeys.length; i += CHUNK) {
+    const slice = visitorKeys.slice(i, i + CHUNK)
+    try {
+      const rows = await prisma.uploadVisitorIdentity.findMany({
+        where: { uploadId, visitorKey: { in: slice } },
+        select: { visitorKey: true, identity: true },
+      })
+      for (const row of rows) {
+        if (row.identity && typeof row.identity === 'object') {
+          out.set(row.visitorKey, row.identity as Record<string, unknown>)
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!msg.includes('upload_visitor_identities') && !msg.includes('UploadVisitorIdentity')) {
+        throw e
+      }
+    }
+  }
+  return out
+}
+
 export async function loadUploadVisitorIdentity(
   uploadId: string,
   visitorKey: string

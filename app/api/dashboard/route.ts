@@ -18,6 +18,7 @@ import {
   parseDashboardWindowParam,
 } from '@/lib/dashboard-window'
 import { resolveProfileMapLocation } from '@/lib/geo-fallback'
+import { loadUploadIdentitiesBatch } from '@/lib/upload-chunk-store'
 
 export async function GET(request: NextRequest) {
   try {
@@ -215,6 +216,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const profileKeys = profiles.map((p) => p.visitorKey)
+    const uploadIdentities =
+      latestUpload?.id != null
+        ? await loadUploadIdentitiesBatch(latestUpload.id, profileKeys)
+        : new Map<string, Record<string, unknown>>()
+
     return NextResponse.json({
       windowStart,
       windowEnd,
@@ -237,6 +244,15 @@ export async function GET(request: NextRequest) {
       },
       profiles: profiles.map((p: any) => {
         const live = windowEventsByVisitor.get(p.visitorKey)
+        const uploadIdentity = uploadIdentities.get(p.visitorKey)
+        const profileIdentity =
+          p.identity && typeof p.identity === 'object'
+            ? (p.identity as Record<string, unknown>)
+            : null
+        const mergedIdentity =
+          profileIdentity && Object.keys(profileIdentity).length > 0
+            ? { ...(uploadIdentity ?? {}), ...profileIdentity }
+            : uploadIdentity ?? profileIdentity
         const mapLoc = resolveProfileMapLocation({
           visitorKey: p.visitorKey,
           lat: p.lat,
@@ -244,7 +260,7 @@ export async function GET(request: NextRequest) {
           city: p.city,
           region: p.region,
           country: p.country,
-          identity: p.identity,
+          identity: mergedIdentity,
         })
         return {
           id: p.id,
@@ -267,7 +283,7 @@ export async function GET(request: NextRequest) {
           region: mapLoc?.region ?? p.region,
           country: p.country,
           mapApproximate: mapLoc?.approximate ?? false,
-          identity: p.identity,
+          identity: mergedIdentity,
           ip: ipMap.get(p.visitorKey) || null,
         }
       }),
